@@ -248,45 +248,12 @@ const Dashboard = () => {
   const [selectedMonth, setSelectedMonth] = useState('');
   const [showMonthlyDetail, setShowMonthlyDetail] = useState(false);
   const [dashboardData, setDashboardData] = useState(generateDummyData());
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
 
   // サイドバー切替
   const toggleSidebar = () => {
     setSidebarOpen(!sidebarOpen);
-  };
-
-  // APIからデータを取得
-  const fetchDashboardData = async () => {
-    setIsLoading(true);
-    setError('');
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/dashboard-data`);
-
-      if (!response.ok) {
-        throw new Error('データの取得に失敗しました');
-      }
-
-      const data = await response.json();
-      setDashboardData(data);
-    } catch (error) {
-      console.error('APIエラー:', error);
-      setError('データの取得中にエラーが発生しました');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // コンポーネントマウント時にデータを取得
-  useEffect(() => {
-    fetchDashboardData();
-  }, []);
-
-  // CSVアップロード成功時の処理
-  const handleUploadSuccess = (uploadResult) => {
-    // データを再取得
-    fetchDashboardData();
   };
 
   // ESCキーでモーダルを閉じる
@@ -308,6 +275,52 @@ const Dashboard = () => {
   const handleMonthlyDetailShow = (month) => {
     setSelectedMonth(month);
     setShowMonthlyDetail(true);
+  };
+
+  // APIからデータを取得する
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setIsLoading(true);
+        const response = await fetch('http://localhost:8000/api/dashboard');
+        if (!response.ok) {
+          throw new Error('APIからのデータ取得に失敗しました');
+        }
+        const data = await response.json();
+        setDashboardData(data);
+      } catch (error) {
+        console.error('APIエラー:', error);
+        // エラー時はダミーデータを使用
+        setDashboardData(generateDummyData());
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
+
+  // CSVアップロード成功時の処理
+  const handleUploadSuccess = () => {
+    // データを再取得
+    fetchData();
+  };
+
+  // データ再取得関数 - リフレッシュボタン用
+  const fetchData = async () => {
+    try {
+      setIsLoading(true);
+      const response = await fetch('http://localhost:8000/api/dashboard');
+      if (!response.ok) {
+        throw new Error('APIからのデータ取得に失敗しました');
+      }
+      const data = await response.json();
+      setDashboardData(data);
+    } catch (error) {
+      console.error('APIエラー:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -390,7 +403,7 @@ const Dashboard = () => {
               </div>
             </div>
 
-            <button className="p-2 bg-white rounded-lg shadow hover:shadow-md transition-shadow" onClick={fetchDashboardData}>
+            <button className="p-2 bg-white rounded-lg shadow hover:shadow-md transition-shadow" onClick={fetchData}>
               <RefreshCw size={20} className="text-gray-500" />
             </button>
 

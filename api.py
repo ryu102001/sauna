@@ -1,20 +1,23 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import numpy as np
 from io import StringIO
 import json
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+import uuid
+import random
 
 app = FastAPI(title="サウナ分析ダッシュボードAPI")
 
 # CORSを有効にして、Reactからのリクエストを許可
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 本番環境では特定のオリジンに制限すべき
+    allow_origins=["http://localhost:3000"],  # Reactフロントエンドのオリジン
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,14 +50,237 @@ dashboard_data = DashboardData(
     }
 )
 
+# ダミーデータ生成関数
+def generate_dummy_data():
+    # 基本データ構造
+    data = {
+        "labels": {
+            "months": ["2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12",
+                      "2024-01", "2024-02", "2024-03", "2024-04", "2024-05"],
+            "daysOfWeek": ["月", "火", "水", "木", "金", "土", "日"],
+            "timeSlots": ["9-12時", "12-15時", "15-18時", "18-21時", "21-24時"],
+            "regions": ["大阪市北区", "大阪市中央区", "大阪市西区", "大阪市浪速区", "大阪市天王寺区", "大阪市淀川区", "その他"],
+            "roomNames": ["Room1", "Room2", "Room3"],
+            "competitorNames": [
+                "HAAAVE.sauna", "KUDOCHI sauna", "MENTE", "M's Sauna",
+                "SAUNA Pod 槃", "SAUNA OOO OSAKA", "大阪サウナ DESSE"
+            ],
+            "ageGroups": ["20代", "30代", "40代", "50代", "~19歳", "60歳~"],
+            "genders": ["男性", "女性"]
+        },
+        "members": {
+            "total": 100,
+            "active": 78,
+            "trial": 45,
+            "visitor": 132,
+            "joinRate": 78.0,
+            "churnRate": 3.2,
+            "genderDistribution": [
+                {"name": "男性", "value": 50},
+                {"name": "女性", "value": 50}
+            ],
+            "ageDistribution": [
+                {"name": "~19歳", "value": 5},
+                {"name": "20代", "value": 35},
+                {"name": "30代", "value": 30},
+                {"name": "40代", "value": 20},
+                {"name": "50代", "value": 7},
+                {"name": "60歳~", "value": 3}
+            ],
+            "regionDistribution": [
+                {"name": "大阪市北区", "value": 30},
+                {"name": "大阪市中央区", "value": 25},
+                {"name": "大阪市西区", "value": 15},
+                {"name": "大阪市浪速区", "value": 10},
+                {"name": "大阪市天王寺区", "value": 8},
+                {"name": "大阪市淀川区", "value": 7},
+                {"name": "その他", "value": 5}
+            ],
+            "membershipTrend": []
+        },
+        "utilization": {
+            "rooms": {
+                "Room1": {"average": 75.2},
+                "Room2": {"average": 68.3},
+                "Room3": {"average": 82.7}
+            },
+            "byDayOfWeek": [],
+            "byTimeSlot": [],
+            "byMonth": []
+        },
+        "competitors": {
+            "pricing": [
+                {"name": "HAAAVE.sauna", "価格": 3500},
+                {"name": "KUDOCHI sauna", "価格": 3800},
+                {"name": "MENTE", "価格": 4000},
+                {"name": "M's Sauna", "価格": 3200},
+                {"name": "SAUNA Pod 槃", "価格": 3600},
+                {"name": "SAUNA OOO OSAKA", "価格": 4200},
+                {"name": "大阪サウナ DESSE", "価格": 3300}
+            ],
+            "details": [
+                {
+                    "施設名": "HAAAVE.sauna",
+                    "所在地": "大阪市北区",
+                    "形態": "個室",
+                    "料金": "3,500円/時",
+                    "ルーム数": "3",
+                    "水風呂": "あり",
+                    "男女混浴": "可",
+                    "開業年": "2023"
+                },
+                {
+                    "施設名": "KUDOCHI sauna",
+                    "所在地": "大阪市中央区",
+                    "形態": "個室",
+                    "料金": "3,800円/時",
+                    "ルーム数": "4",
+                    "水風呂": "あり",
+                    "男女混浴": "可",
+                    "開業年": "2022"
+                },
+                {
+                    "施設名": "MENTE",
+                    "所在地": "大阪市西区",
+                    "形態": "個室",
+                    "料金": "4,000円/時",
+                    "ルーム数": "2",
+                    "水風呂": "あり",
+                    "男女混浴": "可",
+                    "開業年": "2023"
+                },
+                {
+                    "施設名": "M's Sauna",
+                    "所在地": "大阪市天王寺区",
+                    "形態": "個室",
+                    "料金": "3,200円/時",
+                    "ルーム数": "2",
+                    "水風呂": "なし",
+                    "男女混浴": "可",
+                    "開業年": "2021"
+                },
+                {
+                    "施設名": "SAUNA Pod 槃",
+                    "所在地": "大阪市北区",
+                    "形態": "カプセル",
+                    "料金": "3,600円/時",
+                    "ルーム数": "8",
+                    "水風呂": "あり",
+                    "男女混浴": "不可",
+                    "開業年": "2022"
+                },
+                {
+                    "施設名": "SAUNA OOO OSAKA",
+                    "所在地": "大阪市中央区",
+                    "形態": "個室",
+                    "料金": "4,200円/時",
+                    "ルーム数": "5",
+                    "水風呂": "あり",
+                    "男女混浴": "可",
+                    "開業年": "2022"
+                },
+                {
+                    "施設名": "大阪サウナ DESSE",
+                    "所在地": "大阪市浪速区",
+                    "形態": "個室",
+                    "料金": "3,300円/時",
+                    "ルーム数": "3",
+                    "水風呂": "あり",
+                    "男女混浴": "可",
+                    "開業年": "2023"
+                }
+            ],
+            "regionDistribution": [
+                {"name": "大阪市北区", "value": 3},
+                {"name": "大阪市中央区", "value": 5},
+                {"name": "大阪市西区", "value": 2},
+                {"name": "大阪市浪速区", "value": 1},
+                {"name": "大阪市天王寺区", "value": 2},
+                {"name": "大阪市淀川区", "value": 0},
+                {"name": "その他", "value": 1}
+            ]
+        },
+        "finance": {
+            "summary": {
+                "latestMonth": "2024-05",
+                "monthlySales": 1250000,
+                "monthlyProfit": 375000,
+                "profitRate": 30.0
+            },
+            "monthlySalesTrend": [],
+            "salesByType": [
+                {"name": "会員", "value": 850000},
+                {"name": "ビジター", "value": 250000},
+                {"name": "トライアル", "value": 150000}
+            ],
+            "salesByRoom": [
+                {"name": "Room1", "value": 450000},
+                {"name": "Room2", "value": 350000},
+                {"name": "Room3", "value": 450000}
+            ]
+        }
+    }
+
+    # 月次データのトレンド生成
+    for month in data["labels"]["months"]:
+        # 会員トレンド
+        data["members"]["membershipTrend"].append({
+            "name": month,
+            "会員": random.randint(60, 100),
+            "体験者": random.randint(20, 50),
+            "ビジター": random.randint(40, 140)
+        })
+
+        # 月別稼働率
+        data["utilization"]["byMonth"].append({
+            "name": month,
+            "Room1": round(random.uniform(60, 90), 1),
+            "Room2": round(random.uniform(55, 85), 1),
+            "Room3": round(random.uniform(70, 95), 1)
+        })
+
+        # 月別売上
+        sales = random.randint(900000, 1300000)
+        cost = int(sales * 0.7)
+        profit = sales - cost
+
+        data["finance"]["monthlySalesTrend"].append({
+            "name": month,
+            "売上": sales,
+            "利益": profit
+        })
+
+    # 曜日別稼働率
+    for day in data["labels"]["daysOfWeek"]:
+        data["utilization"]["byDayOfWeek"].append({
+            "name": day,
+            "Room1": round(random.uniform(60, 90), 1),
+            "Room2": round(random.uniform(55, 85), 1),
+            "Room3": round(random.uniform(70, 95), 1)
+        })
+
+    # 時間帯別稼働率
+    for time_slot in data["labels"]["timeSlots"]:
+        data["utilization"]["byTimeSlot"].append({
+            "name": time_slot,
+            "Room1": round(random.uniform(60, 90), 1),
+            "Room2": round(random.uniform(55, 85), 1),
+            "Room3": round(random.uniform(70, 95), 1)
+        })
+
+    return data
+
 @app.get("/")
 def read_root():
     return {"message": "サウナ分析ダッシュボードAPI", "version": "1.0.0"}
 
-@app.get("/api/dashboard-data")
-def get_dashboard_data():
-    """ダッシュボード全体のデータを取得"""
-    return dashboard_data
+@app.get("/api/dashboard")
+async def get_dashboard_data():
+    try:
+        data = generate_dummy_data()
+        return JSONResponse(content=data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/upload-csv")
 async def upload_csv(file: UploadFile = File(...), data_type: str = "members"):
@@ -222,6 +448,16 @@ def process_finance_data(df: pd.DataFrame):
         "monthly_trend": monthly_trend,
         "member_type_sales": member_type_sales
     }
+
+# ヘルスチェック
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+# アプリケーション起動時のログ
+@app.on_event("startup")
+async def startup_event():
+    print("API server has started")
 
 # サーバー起動
 if __name__ == "__main__":
