@@ -346,7 +346,10 @@ async def get_dashboard_data():
 async def upload_csv_post(file: UploadFile = File(...), data_type: str = Form(default="auto")):
     """CSVファイルをアップロードして処理する (POSTメソッド)"""
     try:
-        return await process_uploaded_csv(file, data_type)
+        print(f"POST CSV上アップロード開始: file={file.filename}, data_type={data_type}")
+        result = await process_uploaded_csv(file, data_type)
+        print(f"POST CSV処理結果: {result}")
+        return result
     except Exception as e:
         print(f"アップロードエラー(POST): {str(e)}")
         print(f"トレースバック: {traceback.format_exc()}")
@@ -359,7 +362,10 @@ async def upload_csv_post(file: UploadFile = File(...), data_type: str = Form(de
 async def upload_csv_put(file: UploadFile = File(...), data_type: str = Form(default="auto")):
     """CSVファイルをアップロードして処理する (PUTメソッド)"""
     try:
-        return await process_uploaded_csv(file, data_type)
+        print(f"PUT CSV上アップロード開始: file={file.filename}, data_type={data_type}")
+        result = await process_uploaded_csv(file, data_type)
+        print(f"PUT CSV処理結果: {result}")
+        return result
     except Exception as e:
         print(f"アップロードエラー(PUT): {str(e)}")
         print(f"トレースバック: {traceback.format_exc()}")
@@ -367,6 +373,30 @@ async def upload_csv_put(file: UploadFile = File(...), data_type: str = Form(def
             status_code=500,
             content={"status": "エラー", "detail": str(e)}
         )
+
+@app.options("/api/upload-csv")
+async def upload_csv_options():
+    """CSVファイルアップロードのOPTIONSリクエスト処理"""
+    print("OPTIONS リクエスト受信: /api/upload-csv")
+    return JSONResponse(
+        status_code=200,
+        content={"allowed_methods": ["POST", "PUT", "OPTIONS"]},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, PUT, OPTIONS",
+            "Access-Control-Allow-Headers": "*"
+        }
+    )
+
+# テスト用エンドポイント（アップロードが動作しない場合に使用）
+@app.get("/api/test-upload")
+async def test_upload():
+    """アップロード機能のテスト用エンドポイント"""
+    print("テストアップロードエンドポイント呼び出し")
+    return JSONResponse(
+        status_code=200,
+        content={"status": "成功", "message": "アップロードエンドポイントが正常に動作しています"}
+    )
 
 async def process_uploaded_csv(file: UploadFile, data_type: str):
     """CSVファイルをアップロードして処理する共通関数"""
@@ -441,7 +471,18 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
                         csv_str = f.read().decode('cp932', errors='replace')
 
             # StringIOを使ってpandasで読み込む
-            df = pd.read_csv(StringIO(csv_str))
+            try:
+                df = pd.read_csv(StringIO(csv_str))
+            except Exception as e:
+                # セパレータがカンマでない可能性があるので、タブやセミコロンも試す
+                try:
+                    df = pd.read_csv(StringIO(csv_str), sep='\t')
+                except:
+                    try:
+                        df = pd.read_csv(StringIO(csv_str), sep=';')
+                    except Exception as inner_e:
+                        raise Exception(f"CSVフォーマットの解析に失敗しました: {str(inner_e)}")
+
             print(f"CSVファイル解析成功: {file.filename}, カラム={df.columns.tolist()}")
         except Exception as e:
             print(f"CSVファイル解析失敗: {str(e)}")
@@ -450,44 +491,7 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
                 content={"status": "エラー", "detail": f"CSVファイルの解析に失敗しました: {str(e)}"}
             )
 
-        # カラムの確認（稼働率データの場合）
-        if data_type == 'utilization' or data_type == 'frame':
-            required_columns = ['date', 'room', 'occupancy_rate']
-            # 必須カラムの存在確認（日本語版も含む）
-            found_columns = []
-            for req_col in required_columns:
-                japanese_names = {
-                    'date': ['日付', '年月日'],
-                    'room': ['部屋', 'ルーム'],
-                    'occupancy_rate': ['稼働率', '利用率']
-                }
-
-                # 英語カラム名をチェック
-                if req_col in df.columns:
-                    found_columns.append(req_col)
-                    continue
-
-                # 日本語カラム名をチェック
-                for jp_name in japanese_names.get(req_col, []):
-                    if jp_name in df.columns:
-                        found_columns.append(req_col)
-                        break
-
-            # 必須カラムが見つからない場合
-            if len(found_columns) < len(required_columns):
-                missing = set(required_columns) - set(found_columns)
-                print(f"必須カラムがありません: {missing}")
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "status": "エラー",
-                        "detail": f"稼働率データのCSVには、date, room, occupancy_rate のカラムが必要です",
-                        "missing_columns": list(missing),
-                        "found_columns": df.columns.tolist()
-                    }
-                )
-
-        # ファイル名から自動的にデータタイプを推測
+        # ファイル名から自動的にデータタイプを推測（frame_のファイルは稼働率データとして処理）
         filename = file.filename.lower()
         if data_type == 'auto' or data_type == '':
             print(f"ファイル名からデータタイプを自動推測します: {filename}")
@@ -502,20 +506,22 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
 
             print(f"ファイル名から推測したデータタイプ: {data_type}")
 
+        # 'frame_'で始まるファイルは常にframeタイプとして処理
+        if filename.startswith('frame_'):
+            data_type = 'frame'
+            print(f"ファイル名が'frame_'で始まるため、データタイプを強制的に'frame'に設定")
+
         # データタイプに応じた処理
         try:
             if data_type == 'members':
                 process_members_data(df, filename)
             elif data_type == 'utilization':
-                # 稼働率データの場合、必須カラムチェックを行うが、ファイル種類によって処理を変える
-                if filename.startswith('frame_'):
-                    process_frame_data(df, filename)
-                else:
-                    # 通常の稼働率データ処理
-                    process_utilization_data(df)
+                # 稼働率データの場合、カラムチェックは個別の処理関数内で行う
+                process_utilization_data(df)
             elif data_type == 'reservation':
                 process_reservation_data(df, filename)
             elif data_type == 'frame':
+                # フレームデータとして処理（柔軟なカラム検出）
                 process_frame_data(df, filename)
             elif data_type == 'competitors':
                 process_competitors_data(df)
@@ -541,6 +547,7 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
 
         # 正常終了
         return JSONResponse(
+            status_code=200,
             content={"status": "成功", "data_type": data_type, "filename": file.filename}
         )
 
