@@ -46,10 +46,53 @@ is_render = os.environ.get("RENDER", "").lower() == "true"
 # 静的ファイルのディレクトリ
 # Render環境では、ビルドされたフロントエンドがルートディレクトリになっている可能性がある
 static_dir = "frontend/build" if not is_render else "build"
-if is_render and not os.path.exists(static_dir):
-    static_dir = "static"  # フォールバック
-    if not os.path.exists(static_dir):
-        static_dir = "."  # 最終フォールバック
+
+# Render環境でのディレクトリ検出を詳細化
+if is_render:
+    # 利用可能なパスを優先順で確認
+    possible_paths = ["build", "static", "frontend/build", ".", "public"]
+    found = False
+
+    for path in possible_paths:
+        if os.path.exists(path):
+            print(f"ディレクトリが見つかりました: {path}")
+            if os.path.exists(os.path.join(path, "index.html")):
+                static_dir = path
+                found = True
+                print(f"index.htmlが見つかりました: {os.path.join(path, 'index.html')}")
+                break
+            else:
+                # サブディレクトリも確認
+                for subdir in os.listdir(path):
+                    subpath = os.path.join(path, subdir)
+                    if os.path.isdir(subpath) and os.path.exists(os.path.join(subpath, "index.html")):
+                        static_dir = subpath
+                        found = True
+                        print(f"index.htmlが見つかりました: {os.path.join(subpath, 'index.html')}")
+                        break
+                if found:
+                    break
+
+    if not found:
+        print("警告: index.htmlが見つかりませんでした")
+        # リスト存在するディレクトリ内容
+        print(f"現在のディレクトリ内容: {os.listdir('.')}")
+        if os.path.exists('static'):
+            print(f"static内のファイル: {os.listdir('static')}")
+
+            # staticディレクトリに移動し、index.htmlを作成する
+            if not os.path.exists(os.path.join('static', 'index.html')) and os.path.exists(os.path.join('frontend', 'build', 'index.html')):
+                # frontendビルドからindex.htmlをコピー
+                import shutil
+                try:
+                    shutil.copy(
+                        os.path.join('frontend', 'build', 'index.html'),
+                        os.path.join('static', 'index.html')
+                    )
+                    print("index.htmlをfrontend/buildからstaticにコピーしました")
+                    static_dir = "static"
+                except Exception as e:
+                    print(f"index.htmlのコピーに失敗しました: {str(e)}")
 
 # 静的ファイルが存在するか確認
 if not os.path.exists(static_dir):
@@ -58,6 +101,8 @@ if not os.path.exists(static_dir):
     print(f"ディレクトリ内容: {os.listdir('.')}")
     if os.path.exists('frontend'):
         print(f"Frontendディレクトリ内容: {os.listdir('frontend')}")
+        if os.path.exists('frontend/build'):
+            print(f"Frontend buildディレクトリ内容: {os.listdir('frontend/build')}")
 
 # APIの全エンドポイントをサブパスにマウント
 try:
@@ -81,6 +126,49 @@ async def read_index():
     if check_file_exists(index_path):
         return FileResponse(index_path)
     else:
+        # index.htmlが見つからない場合は、ファイル作成のためのロジックを追加
+        fallback_paths = [
+            os.path.join("frontend", "build", "index.html"),
+            os.path.join("build", "index.html"),
+            os.path.join("public", "index.html")
+        ]
+
+        for fallback_path in fallback_paths:
+            if check_file_exists(fallback_path):
+                print(f"フォールバックindex.htmlを使用: {fallback_path}")
+                return FileResponse(fallback_path)
+
+        # それでも見つからない場合は、簡易なHTMLページを作成して返す
+        if is_render and os.path.exists('static') and os.path.exists(os.path.join('static', 'js')):
+            print("簡易index.htmlを生成")
+            # staticディレクトリにJSファイルのみある場合、簡易HTMLを作成
+            js_files = [f for f in os.listdir(os.path.join('static', 'js')) if f.endswith('.js')]
+
+            if js_files:
+                html_content = f"""
+                <!DOCTYPE html>
+                <html lang="ja">
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1">
+                    <title>サウナ分析ダッシュボード</title>
+                </head>
+                <body>
+                    <div id="root"></div>
+                    <script src="/static/js/{js_files[0]}"></script>
+                </body>
+                </html>
+                """
+
+                # 一時的なindex.htmlファイルを作成
+                try:
+                    with open(os.path.join('static', 'index.html'), 'w', encoding='utf-8') as f:
+                        f.write(html_content)
+                    print("簡易index.htmlを保存しました")
+                    return FileResponse(os.path.join('static', 'index.html'))
+                except Exception as e:
+                    print(f"index.htmlの作成に失敗: {str(e)}")
+
         error_message = f"index.htmlが見つかりません。パス: {index_path}, ディレクトリ内容: {os.listdir(static_dir) if os.path.exists(static_dir) else '不明'}"
         print(error_message)
         return JSONResponse({"error": error_message}, status_code=404)

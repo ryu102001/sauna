@@ -16,6 +16,7 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "postbuild": "mkdir -p ../static && mkdir -p ../static/js && mkdir -p ../static/css && cp -r build/static/js/* ../static/js/ && cp -r build/static/css/* ../static/css/ && cp build/index.html ../static/index.html",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
