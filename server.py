@@ -163,34 +163,93 @@ async def api_endpoint(request: Request, path: str):
         )
 
     try:
-        # マルチパートデータの場合の特別な処理
+        # マルチパートデータの場合、新しいScopeベースのアプローチは使用しない
         content_type = request.headers.get("content-type", "")
         print(f"リクエストContent-Type: {content_type}")
+        is_multipart = content_type.startswith("multipart/form-data")
 
-        # APIへ直接転送（パスを修正）
-        new_path = "/" + path
-        print(f"APIへ転送: パス={new_path}")
+        if is_multipart:
+            print("マルチパートフォームデータ検出 - 専用処理を使用")
 
-        # 直接APIアプリへリクエストを転送し、レスポンスをそのまま返す
-        from starlette.datastructures import Headers
+            # リクエスト本文を読み込む
+            body = await request.body()
 
-        # 新しいスコープを作成して直接転送
-        scope = {
-            "type": "http",
-            "http_version": "1.1",
-            "method": request.method,
-            "path": new_path,
-            "root_path": "",
-            "scheme": request.url.scheme,
-            "query_string": request.url.query.encode(),
-            "headers": [(k.lower().encode(), v.encode()) for k, v in request.headers.items()],
-            "client": request.scope.get("client", None),
-            "server": request.scope.get("server", None),
-        }
+            # マルチパートリクエスト用の特別な処理
+            # 通常のScopeベース転送では適切に処理できないため
+            from starlette.requests import Request as StarletteRequest
 
-        # レスポンスを直接受け取り、受け渡す
-        res = await api.app(scope, request._receive, request._send)
-        return res
+            # 新しいスコープを作成
+            new_scope = request.scope.copy()
+            new_scope["path"] = "/" + path
+
+            # 新しいリクエストを作成
+            new_request = StarletteRequest(
+                scope=new_scope,
+                receive=request._receive,
+                send=request._send
+            )
+
+            # リクエスト本文をセット
+            setattr(new_request, "_body", body)
+
+            # APIにリクエストを転送
+            res = await api.app(new_request)
+
+            # レスポンスにCORS情報を追加
+            headers = dict(res.headers)
+            headers["Access-Control-Allow-Origin"] = "*"
+
+            # レスポンスのContent-Typeがない場合は追加
+            if "content-type" not in [h.lower() for h in headers]:
+                headers["Content-Type"] = "application/json"
+
+            # 新しいレスポンスを返す
+            from starlette.responses import Response
+            return Response(
+                content=res.body,
+                status_code=res.status_code,
+                headers=headers
+            )
+        else:
+            # 通常のリクエスト処理（Scopeベース）
+            print(f"通常のリクエスト - Scopeベースの転送を使用: パス=/{path}")
+
+            # 新しいスコープを作成
+            scope = {
+                "type": "http",
+                "http_version": "1.1",
+                "method": request.method,
+                "path": "/" + path,
+                "root_path": "",
+                "scheme": request.url.scheme,
+                "query_string": request.url.query.encode(),
+                "headers": [(k.lower().encode(), v.encode()) for k, v in request.headers.items()],
+                "client": request.scope.get("client", None),
+                "server": request.scope.get("server", None),
+            }
+
+            # レスポンスの処理を制御するために、特殊なsend関数を作成
+            async def send_wrapper(message):
+                # Responseヘッダーにアクセスし、必要なCORSヘッダーを追加
+                if message["type"] == "http.response.start":
+                    # ヘッダーを辞書に変換
+                    headers = dict(message.get("headers", []))
+                    # CORSヘッダーを追加
+                    headers[b"access-control-allow-origin"] = b"*"
+                    # Content-Typeがない場合は追加
+                    if b"content-type" not in headers:
+                        headers[b"content-type"] = b"application/json"
+                    # ヘッダーをリストに戻す
+                    message["headers"] = [(k, v) for k, v in headers.items()]
+
+                # 元のsend関数に転送
+                await request._send(message)
+
+            # APIにリクエストを転送
+            await api.app(scope, request._receive, send_wrapper)
+
+            # 処理は完了しているので、None を返す
+            return None
 
     except Exception as e:
         print(f"APIエラー: {str(e)}")
