@@ -277,16 +277,22 @@ def read_root():
 
 @app.get("/api/dashboard")
 async def get_dashboard_data():
+    """ダッシュボードデータを取得するエンドポイント"""
     try:
-        # 直接dictに変換して返す
+        # 直接辞書として返す
         data_dict = {
-            "labels": dashboard_data.labels,
-            "metrics": dashboard_data.metrics,
-            "members": dashboard_data.members,
-            "utilization": dashboard_data.utilization,
-            "competitors": dashboard_data.competitors,
-            "finance": dashboard_data.finance
+            "labels": dict(dashboard_data.labels),
+            "metrics": dict(dashboard_data.metrics),
+            "members": dict(dashboard_data.members),
+            "utilization": dict(dashboard_data.utilization),
+            "competitors": dict(dashboard_data.competitors),
+            "finance": dict(dashboard_data.finance)
         }
+        # nullや空の辞書を削除
+        for key in list(data_dict.keys()):
+            if data_dict[key] is None or data_dict[key] == {}:
+                data_dict[key] = {}
+
         return JSONResponse(content=data_dict)
     except Exception as e:
         print(f"ダッシュボードデータの取得中にエラーが発生しました: {str(e)}")
@@ -933,7 +939,10 @@ async def health_check():
 @app.on_event("startup")
 async def startup_event():
     print("API server has started")
-    # ここで必要なスタートアップ処理を行う
+
+    # アップロードディレクトリを作成
+    if not os.path.exists(UPLOAD_DIR):
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # サーバー起動
 if __name__ == "__main__":
