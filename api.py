@@ -300,8 +300,17 @@ async def get_dashboard_data():
         return JSONResponse(content=generate_dummy_data())
 
 @app.post("/api/upload-csv")
-async def upload_csv(file: UploadFile = File(...), data_type: str = Form(default="auto")):
-    """CSVファイルをアップロードして処理する"""
+async def upload_csv_post(file: UploadFile = File(...), data_type: str = Form(default="auto")):
+    """CSVファイルをアップロードして処理する (POSTメソッド)"""
+    return await process_uploaded_csv(file, data_type)
+
+@app.put("/api/upload-csv")
+async def upload_csv_put(file: UploadFile = File(...), data_type: str = Form(default="auto")):
+    """CSVファイルをアップロードして処理する (PUTメソッド)"""
+    return await process_uploaded_csv(file, data_type)
+
+async def process_uploaded_csv(file: UploadFile, data_type: str):
+    """CSVファイルをアップロードして処理する共通関数"""
     print(f"CSVアップロードリクエスト受信: file={file.filename}, data_type={data_type}")
 
     # ファイル名の確認
