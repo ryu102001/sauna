@@ -1,20 +1,18 @@
 import os
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 import api  # 既存のAPIモジュールをインポート
 
 # 環境変数からポート番号を取得
 PORT = int(os.environ.get("PORT", 8000))
 
-# 既存のFastAPIアプリを取得
-app = api.app
+# 新しいFastAPIアプリを作成
+app = FastAPI()
 
-# 静的ファイルを提供するためのマウント
-app.mount("/", StaticFiles(directory="frontend/build", html=True), name="static")
-
-# CORSミドルウェアを追加（既存の設定を保持）
+# CORSミドルウェアを追加
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 本番環境では適切に制限するべき
@@ -22,6 +20,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# APIの全エンドポイントをサブパスにマウント
+app.mount("/api", api.app)
+
+# 静的ファイルのディレクトリ
+static_dir = "frontend/build"
+
+# ルートパスへのリクエストをindex.htmlにリダイレクト
+@app.get("/")
+async def read_index():
+    return FileResponse(f"{static_dir}/index.html")
+
+# その他のファイルパスを静的ファイルとして提供
+app.mount("/", StaticFiles(directory=static_dir), name="static")
 
 if __name__ == "__main__":
     # サーバー起動

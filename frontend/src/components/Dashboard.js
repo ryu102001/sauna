@@ -32,8 +32,14 @@ const PIE_COLORS = [
   COLORS.warning
 ];
 
-// APIのベースURL
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+// APIのベースURL - 環境変数から取得するように修正
+const API_BASE_URL = process.env.REACT_APP_API_URL || '';
+
+// APIパス
+const API_PATHS = {
+  dashboard: `${API_BASE_URL}/api/api/dashboard`,
+  upload: `${API_BASE_URL}/api/api/upload-csv`
+};
 
 // レスポンシブカードコンポーネント
 const Card = ({ title, value, subValue, icon, color = COLORS.primary, className = '' }) => {
@@ -146,7 +152,7 @@ const CSVUploader = ({ onUploadSuccess }) => {
         console.log(`アップロード開始: ${file.name}, タイプ: ${dataType}`);
 
         // APIサーバーにファイルをアップロード
-        const response = await fetch(`${API_BASE_URL}/api/upload-csv`, {
+        const response = await fetch(API_PATHS.upload, {
           method: 'POST',
           body: formData,
         });
@@ -342,7 +348,7 @@ const Dashboard = () => {
     const fetchData = async () => {
       try {
         setIsLoading(true);
-        const response = await fetch(`${API_BASE_URL}/api/dashboard`);
+        const response = await fetch(API_PATHS.dashboard);
         if (!response.ok) {
           throw new Error('APIからのデータ取得に失敗しました');
         }
@@ -373,7 +379,7 @@ const Dashboard = () => {
       // 数回再試行するようにする
       const fetchWithRetry = async (retryCount = 3) => {
         try {
-          const response = await fetch(`${API_BASE_URL}/api/dashboard?t=${new Date().getTime()}`);
+          const response = await fetch(API_PATHS.dashboard);
           if (!response.ok) {
             throw new Error('APIからのデータ取得に失敗しました');
           }
@@ -403,7 +409,7 @@ const Dashboard = () => {
     try {
       setIsLoading(true);
       // キャッシュを回避するためのタイムスタンプ付きURLでデータを再取得
-      const response = await fetch(`${API_BASE_URL}/api/dashboard?t=${new Date().getTime()}`);
+      const response = await fetch(API_PATHS.dashboard);
       if (!response.ok) {
         throw new Error('APIからのデータ取得に失敗しました');
       }
