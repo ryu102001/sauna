@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: sauna-dashboard
+    env: python
+    runtime: python3
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt --no-cache-dir && cd frontend && npm install && CI=false npm run build && cd ..
+    startCommand: python3 server.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: RENDER
+        value: true
+    autoDeploy: true
