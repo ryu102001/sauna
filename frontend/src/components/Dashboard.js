@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Users, Calendar, Target, BarChart2, TrendingUp, Download, Filter, RefreshCw, Menu, ChevronDown, Upload, DollarSign, Percent, PieChart } from 'lucide-react';
-import { ResponsiveContainer, BarChart, Bar, LineChart, Line, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, AreaChart, Area } from 'recharts';
+import { Activity, Users, Calendar, Target, BarChart2, TrendingUp, Download, Filter, RefreshCw, Menu, ChevronDown, Upload, DollarSign, Percent } from 'lucide-react';
+import { ResponsiveContainer, BarChart, Bar, LineChart, Line, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 
 // カラーパレット
 const COLORS = {

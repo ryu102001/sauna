@@ -280,7 +280,7 @@ async def get_dashboard_data():
     try:
         # Pydantic v2対応
         try:
-            # 直接dictを生成して返す（model_dumpではなく）
+            # 直接dictを生成して返す（model_dumpやdictメソッドを使わない）
             return JSONResponse(content={
                 "labels": dashboard_data.labels,
                 "metrics": dashboard_data.metrics,
