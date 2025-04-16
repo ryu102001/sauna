@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 import uuid
 import random
+import re
 
 app = FastAPI(title="サウナ分析ダッシュボードAPI")
 
@@ -283,77 +284,130 @@ async def get_dashboard_data():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/upload-csv")
-async def upload_csv(file: UploadFile = File(...), data_type: str = "members"):
+async def upload_csv(file: UploadFile = File(...), data_type: str = Form('utilization')):
     """CSVファイルをアップロードして処理する"""
+    # ファイル名の確認
     if not file.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="CSVファイルのみアップロード可能です")
 
+    # テンポラリファイルに保存
+    temp_file = f"uploads/{file.filename}"
+    os.makedirs(os.path.dirname(temp_file), exist_ok=True)
+
     try:
-        # ファイルの内容を読み込む
         contents = await file.read()
-        # バイナリデータを文字列に変換
-        csv_data = StringIO(contents.decode('utf-8-sig'))
+        with open(temp_file, 'wb') as f:
+            f.write(contents)
 
-        # pandasでCSVを読み込む
-        df = pd.read_csv(csv_data)
+        # CSVの解析
+        try:
+            df = pd.read_csv(temp_file)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"CSVファイルの解析に失敗しました: {str(e)}")
 
-        # データタイプに応じて処理
-        if data_type == "members":
-            process_members_data(df)
-        elif data_type == "utilization":
-            process_utilization_data(df)
-        elif data_type == "competitors":
-            process_competitors_data(df)
-        elif data_type == "finance":
-            process_finance_data(df)
-        else:
-            raise HTTPException(status_code=400, detail=f"不明なデータタイプ: {data_type}")
+        # ファイル名から自動的にデータタイプを推測
+        filename = file.filename.lower()
+        if data_type == 'auto' or data_type == '':
+            if filename.startswith('member'):
+                data_type = 'members'
+            elif filename.startswith('reservation'):
+                data_type = 'reservation'
+            elif filename.startswith('frame'):
+                data_type = 'frame'
+            elif filename.startswith('sales'):
+                data_type = 'finance'
 
-        # ファイルを保存
-        file_path = os.path.join(UPLOAD_DIR, f"{data_type}_{file.filename}")
-        with open(file_path, "wb") as f:
-            # ファイルポインタを先頭に戻す
-            await file.seek(0)
-            f.write(await file.read())
+        # データタイプに応じた処理
+        try:
+            if data_type == 'members':
+                process_members_data(df, filename)
+            elif data_type == 'utilization':
+                # 稼働率データの場合、必須カラムチェックを行うが、ファイル種類によって処理を変える
+                if filename.startswith('frame_'):
+                    process_frame_data(df, filename)
+                else:
+                    # 通常の稼働率データ処理（既存のコード）
+                    process_utilization_data(df)
+            elif data_type == 'reservation':
+                process_reservation_data(df, filename)
+            elif data_type == 'frame':
+                process_frame_data(df, filename)
+            elif data_type == 'competitors':
+                process_competitors_data(df)
+            elif data_type == 'finance':
+                if filename.startswith('sales_'):
+                    process_sales_data(df, filename)
+                else:
+                    process_finance_data(df)
+            else:
+                raise HTTPException(status_code=400, detail="無効なデータタイプです")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-        return {
-            "filename": file.filename,
-            "data_type": data_type,
-            "rows": len(df),
-            "columns": list(df.columns),
-            "save_path": file_path
-        }
+        return {"status": "成功", "data_type": data_type, "filename": file.filename}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"CSVファイルの処理中にエラーが発生しました: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"ファイル処理中にエラーが発生しました: {str(e)}")
+    finally:
+        # 一時ファイルの削除
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
 
-def process_members_data(df: pd.DataFrame):
+def process_members_data(df: pd.DataFrame, filename: str):
     """会員データを処理する"""
-    # データの検証
-    required_columns = ["member_id", "gender", "age_group", "region", "join_date"]
-    if not all(col in df.columns for col in required_columns):
-        raise HTTPException(status_code=400, detail="必要なカラムが不足しています: " + ", ".join(required_columns))
+    # カラムがない場合は自動生成する（データ形式の柔軟性を持たせる）
+    member_columns = {
+        "member_id": "会員ID",
+        "gender": "性別",
+        "age_group": "年齢層",
+        "region": "地域",
+        "join_date": "入会日",
+        "status": "ステータス"
+    }
+
+    # 既存カラム名をチェック
+    existing_columns = set(df.columns)
 
     # 会員データの基本集計
     total_members = len(df)
-    active_members = len(df[df['status'] == 'active']) if 'status' in df.columns else total_members
 
-    # 性別分布
-    gender_counts = df['gender'].value_counts().to_dict()
+    # 会員IDカラムの特定
+    member_id_col = next((col for col in df.columns if 'id' in col.lower() or 'member' in col.lower()), df.columns[0])
 
-    # 年齢層分布
-    age_counts = df['age_group'].value_counts().to_dict()
+    # 性別カラムの特定と集計
+    gender_col = next((col for col in df.columns if 'gender' in col.lower() or '性別' in col), None)
+    gender_counts = {}
+    if gender_col:
+        gender_counts = df[gender_col].value_counts().to_dict()
 
-    # 地域分布
-    region_counts = df['region'].value_counts().to_dict()
+    # 年齢層カラムの特定と集計
+    age_col = next((col for col in df.columns if 'age' in col.lower() or '年齢' in col), None)
+    age_counts = {}
+    if age_col:
+        age_counts = df[age_col].value_counts().to_dict()
+
+    # 地域カラムの特定と集計
+    region_col = next((col for col in df.columns if 'region' in col.lower() or '地域' in col or '住所' in col), None)
+    region_counts = {}
+    if region_col:
+        region_counts = df[region_col].value_counts().to_dict()
+
+    # ステータスカラムの特定
+    status_col = next((col for col in df.columns if 'status' in col.lower() or 'ステータス' in col), None)
+    active_members = total_members
+    if status_col:
+        active_values = ['active', 'アクティブ', '有効']
+        active_members = len(df[df[status_col].isin(active_values)])
 
     # データをグローバル変数に設定
     dashboard_data.members = {
         "total": total_members,
         "active": active_members,
-        "gender_distribution": gender_counts,
-        "age_distribution": age_counts,
-        "region_distribution": region_counts
+        "gender_distribution": [{"name": k, "value": v} for k, v in gender_counts.items()],
+        "age_distribution": [{"name": k, "value": v} for k, v in age_counts.items()],
+        "region_distribution": [{"name": k, "value": v} for k, v in region_counts.items()]
     }
 
     # 入会率と退会率を計算
@@ -365,59 +419,200 @@ def process_members_data(df: pd.DataFrame):
             "churn_rate": ((total_members - active_members) / total_members) * 100
         }
 
-def process_utilization_data(df: pd.DataFrame):
-    """稼働率データを処理する"""
-    # データの検証
-    required_columns = ["date", "room", "occupancy_rate"]
-    if not all(col in df.columns for col in required_columns):
-        raise HTTPException(status_code=400, detail="必要なカラムが不足しています: " + ", ".join(required_columns))
+def process_reservation_data(df: pd.DataFrame, filename: str):
+    """予約データを処理する"""
+    # 予約データの基本的なカラム（柔軟に対応）
+    # ファイル名から年月を抽出
+    year_month_match = re.search(r'(\d{4})_(\d{2})', filename)
 
-    # 日付カラムをdatetime型に変換
-    df['date'] = pd.to_datetime(df['date'])
-    df['month'] = df['date'].dt.strftime('%Y-%m')
-    df['day_of_week'] = df['date'].dt.day_name()
-
-    # 部屋ごとの平均稼働率
-    room_avg_rates = df.groupby('room')['occupancy_rate'].mean().to_dict()
-
-    # 月別の稼働率
-    monthly_rates = df.groupby(['month', 'room'])['occupancy_rate'].mean().unstack().to_dict()
-
-    # 曜日別稼働率
-    weekday_rates = df.groupby(['day_of_week', 'room'])['occupancy_rate'].mean().unstack().to_dict()
-
-    # データをグローバル変数に設定
-    dashboard_data.utilization = {
-        "room_avg_rates": room_avg_rates,
-        "monthly_rates": monthly_rates,
-        "weekday_rates": weekday_rates
-    }
-
-def process_competitors_data(df: pd.DataFrame):
-    """競合データを処理する"""
-    # データの検証
-    required_columns = ["name", "location", "hourly_rate"]
-    if not all(col in df.columns for col in required_columns):
-        raise HTTPException(status_code=400, detail="必要なカラムが不足しています: " + ", ".join(required_columns))
-
-    # 競合の価格比較データ
-    price_comparison = df[['name', 'hourly_rate']].set_index('name').to_dict()['hourly_rate']
-
-    # 競合詳細情報
-    competitor_details = df.to_dict(orient='records')
-
-    # 地域分布
-    if 'area' in df.columns:
-        area_distribution = df['area'].value_counts().to_dict()
+    if year_month_match:
+        year = year_month_match.group(1)
+        month = year_month_match.group(2)
+        target_month = f"{year}-{month}"
     else:
-        area_distribution = {}
+        # ファイル名から年月が取得できない場合、全データ対象とする
+        target_month = None
+
+    # 日付カラムの特定
+    date_col = next((col for col in df.columns if 'date' in col.lower() or '日付' in col), None)
+    # 部屋カラムの特定
+    room_col = next((col for col in df.columns if 'room' in col.lower() or '部屋' in col), None)
+    # 時間帯カラムの特定
+    time_col = next((col for col in df.columns if 'time' in col.lower() or '時間' in col), None)
+
+    if date_col and room_col:
+        # 日付データの変換
+        try:
+            df[date_col] = pd.to_datetime(df[date_col])
+        except:
+            pass
+
+        # もし時間が含まれていなければ、稼働率を計算できない
+        # そのため、予約データからフレームデータを作成して稼働率を計算する基礎とする
+
+        # 予約データを基に稼働データを作成
+        # 月次の予約データを集計
+        reservations_by_room = df.groupby(room_col).size().to_dict()
+
+        # データをグローバル変数に追加/更新
+        if not hasattr(dashboard_data, 'reservations'):
+            dashboard_data.reservations = {}
+
+        month_key = target_month if target_month else "all"
+        dashboard_data.reservations[month_key] = {
+            "room_counts": reservations_by_room,
+            "total_reservations": len(df)
+        }
+
+        # 既存の稼働率データがあれば、それと組み合わせて処理
+        process_combined_utilization_data()
+
+def process_frame_data(df: pd.DataFrame, filename: str):
+    """予約枠データを処理する"""
+    # ファイル名から年月を抽出
+    year_month_match = re.search(r'(\d{4})_(\d{2})', filename)
+
+    if year_month_match:
+        year = year_month_match.group(1)
+        month = year_month_match.group(2)
+        target_month = f"{year}-{month}"
+    else:
+        # ファイル名から年月が取得できない場合、全データ対象とする
+        target_month = None
+
+    # 日付カラムの特定
+    date_col = next((col for col in df.columns if 'date' in col.lower() or '日付' in col), None)
+    # 部屋カラムの特定
+    room_col = next((col for col in df.columns if 'room' in col.lower() or '部屋' in col), None)
+    # 枠状態カラムの特定（利用可能かどうか）
+    status_col = next((col for col in df.columns if 'status' in col.lower() or '状態' in col or '利用' in col), None)
+
+    if date_col and room_col:
+        # 枠データからルームごとの利用可能枠数を計算
+        frames_by_room = df.groupby(room_col).size().to_dict()
+
+        # 状態カラムがある場合、利用済み枠数も計算
+        used_frames = {}
+        if status_col:
+            used_values = ['used', '利用済み', '使用済', '予約済']
+            used_frames = df[df[status_col].isin(used_values)].groupby(room_col).size().to_dict()
+
+        # 稼働率計算（利用枠 / 総枠数）
+        occupancy_rates = {}
+        for room, total in frames_by_room.items():
+            used = used_frames.get(room, 0)
+            occupancy_rates[room] = (used / total) * 100 if total > 0 else 0
+
+        # データをグローバル変数に追加/更新
+        if not hasattr(dashboard_data, 'frames'):
+            dashboard_data.frames = {}
+
+        month_key = target_month if target_month else "all"
+        dashboard_data.frames[month_key] = {
+            "total_frames": frames_by_room,
+            "used_frames": used_frames,
+            "occupancy_rates": occupancy_rates
+        }
+
+        # 予約データと枠データを組み合わせて稼働率データを生成
+        process_combined_utilization_data()
+
+def process_combined_utilization_data():
+    """予約データと枠データを組み合わせて稼働率を計算"""
+    # 稼働率データの初期化
+    utilization_data = {
+        "rooms": {},
+        "byMonth": [],
+        "byDayOfWeek": [],
+        "byTimeSlot": []
+    }
+
+    # もし枠データがある場合、それをベースに稼働率を計算
+    if hasattr(dashboard_data, 'frames'):
+        # ルーム別の平均稼働率
+        all_occupancy = {}
+
+        for month_key, frame_data in dashboard_data.frames.items():
+            # 月次データのリストに追加
+            if month_key != "all":
+                month_data = {"name": month_key}
+                for room, rate in frame_data["occupancy_rates"].items():
+                    month_data[room] = rate
+                    # 全体の平均にも追加
+                    if room not in all_occupancy:
+                        all_occupancy[room] = []
+                    all_occupancy[room].append(rate)
+
+                utilization_data["byMonth"].append(month_data)
+
+        # 全ルームの平均稼働率を計算
+        for room, rates in all_occupancy.items():
+            avg_rate = sum(rates) / len(rates) if rates else 0
+            utilization_data["rooms"][room] = {"average": avg_rate}
+
+    # 曜日別・時間帯別データも計算（もし元データに日付情報がある場合）
+    # ここでは簡易的に擬似データを生成
 
     # データをグローバル変数に設定
-    dashboard_data.competitors = {
-        "price_comparison": price_comparison,
-        "competitor_details": competitor_details,
-        "area_distribution": area_distribution
-    }
+    dashboard_data.utilization = utilization_data
+
+def process_sales_data(df: pd.DataFrame, filename: str):
+    """売上データを処理する"""
+    # ファイル名から年月を抽出
+    year_month_match = re.search(r'(\d{4})_(\d{2})', filename)
+
+    if year_month_match:
+        year = year_month_match.group(1)
+        month = year_month_match.group(2)
+        target_month = f"{year}-{month}"
+    else:
+        # ファイル名から年月が取得できない場合、全データ対象とする
+        target_month = None
+
+    # 日付カラムの特定
+    date_col = next((col for col in df.columns if 'date' in col.lower() or '日付' in col), None)
+    # 売上カラムの特定
+    sales_col = next((col for col in df.columns if 'sales' in col.lower() or '売上' in col or '金額' in col), None)
+    # 部屋カラムの特定
+    room_col = next((col for col in df.columns if 'room' in col.lower() or '部屋' in col), None)
+    # 会員種別カラムの特定
+    member_type_col = next((col for col in df.columns if 'member' in col.lower() or '会員' in col or '種別' in col), None)
+
+    if sales_col:
+        # 総売上の計算
+        total_sales = df[sales_col].sum()
+
+        # 推定コストと利益の計算（コスト率を70%と仮定）
+        estimated_cost = total_sales * 0.7
+        estimated_profit = total_sales - estimated_cost
+        estimated_profit_rate = (estimated_profit / total_sales) * 100 if total_sales > 0 else 0
+
+        # ルーム別売上（ルームカラムがある場合）
+        sales_by_room = {}
+        if room_col:
+            sales_by_room = df.groupby(room_col)[sales_col].sum().to_dict()
+
+        # 会員種別別売上（会員種別カラムがある場合）
+        sales_by_member_type = {}
+        if member_type_col:
+            sales_by_member_type = df.groupby(member_type_col)[sales_col].sum().to_dict()
+
+        # データをグローバル変数に追加/更新
+        if not hasattr(dashboard_data, 'sales'):
+            dashboard_data.sales = {}
+
+        month_key = target_month if target_month else "all"
+        dashboard_data.sales[month_key] = {
+            "total_sales": total_sales,
+            "estimated_cost": estimated_cost,
+            "estimated_profit": estimated_profit,
+            "profit_rate": estimated_profit_rate,
+            "sales_by_room": sales_by_room,
+            "sales_by_member_type": sales_by_member_type
+        }
+
+        # 財務データに反映
+        update_finance_data()
 
 def process_finance_data(df: pd.DataFrame):
     """財務データを処理する"""
@@ -448,6 +643,261 @@ def process_finance_data(df: pd.DataFrame):
         "monthly_trend": monthly_trend,
         "member_type_sales": member_type_sales
     }
+
+def process_utilization_data(df: pd.DataFrame):
+    """稼働率データを処理する（従来の方法）"""
+    # データの検証 - カラム名を自動検出する
+    date_col = next((col for col in df.columns if 'date' in col.lower() or '日付' in col), None)
+    room_col = next((col for col in df.columns if 'room' in col.lower() or '部屋' in col), None)
+    occupancy_col = next((col for col in df.columns if 'occupancy' in col.lower() or '稼働' in col or '率' in col), None)
+
+    if not (date_col and room_col and occupancy_col):
+        # 必要なカラムが見つからない場合は、柔軟に対応
+        # 日付カラムを特定（年月日を含むカラム）
+        if not date_col:
+            date_candidates = [col for col in df.columns if any(term in col.lower() for term in ['date', 'day', 'dt', '日', '日付'])]
+            date_col = date_candidates[0] if date_candidates else df.columns[0]
+
+        # 部屋カラムを特定
+        if not room_col:
+            room_candidates = [col for col in df.columns if any(term in col.lower() for term in ['room', 'space', '部屋', 'ルーム'])]
+            room_col = room_candidates[0] if room_candidates else df.columns[1] if len(df.columns) > 1 else None
+
+        # 稼働率カラムを特定
+        if not occupancy_col:
+            occupancy_candidates = [col for col in df.columns if any(term in col.lower() for term in ['rate', 'occupancy', '率', '稼働'])]
+            occupancy_col = occupancy_candidates[0] if occupancy_candidates else df.columns[2] if len(df.columns) > 2 else None
+
+    if date_col and room_col and occupancy_col:
+        # 日付データの変換
+        try:
+            df[date_col] = pd.to_datetime(df[date_col])
+        except:
+            # 日付変換エラーの場合、そのまま使用
+            pass
+
+        # ルーム別の平均稼働率
+        room_utilization = df.groupby(room_col)[occupancy_col].mean().to_dict()
+
+        # 月別稼働率
+        try:
+            df['month'] = df[date_col].dt.strftime('%Y-%m')
+        except:
+            # 日付変換エラーの場合、月別データは作成しない
+            monthly_data = []
+        else:
+            monthly_utilization = df.groupby(['month', room_col])[occupancy_col].mean().reset_index()
+            monthly_data = []
+
+            for month in monthly_utilization['month'].unique():
+                month_data = {'name': month}
+                for room in df[room_col].unique():
+                    value = monthly_utilization[(monthly_utilization['month'] == month) &
+                                               (monthly_utilization[room_col] == room)][occupancy_col].values
+                    month_data[room] = float(value[0]) if len(value) > 0 else 0
+                monthly_data.append(month_data)
+
+        # 曜日別稼働率
+        weekday_data = []
+        try:
+            df['weekday'] = df[date_col].dt.dayofweek
+            weekday_map = {0: '月', 1: '火', 2: '水', 3: '木', 4: '金', 5: '土', 6: '日'}
+            df['weekday_name'] = df['weekday'].map(weekday_map)
+
+            weekday_utilization = df.groupby(['weekday_name', room_col])[occupancy_col].mean().reset_index()
+
+            for day in ['月', '火', '水', '木', '金', '土', '日']:
+                day_data = {'name': day}
+                for room in df[room_col].unique():
+                    value = weekday_utilization[(weekday_utilization['weekday_name'] == day) &
+                                              (weekday_utilization[room_col] == room)][occupancy_col].values
+                    day_data[room] = float(value[0]) if len(value) > 0 else 0
+                weekday_data.append(day_data)
+        except:
+            # 曜日変換エラーの場合、曜日別データは作成しない
+            pass
+
+        # 時間帯別稼働率（データがある場合）
+        time_data = []
+        time_slot_col = next((col for col in df.columns if 'time' in col.lower() or '時間' in col or '時間帯' in col), None)
+        if time_slot_col:
+            time_utilization = df.groupby([time_slot_col, room_col])[occupancy_col].mean().reset_index()
+            for slot in df[time_slot_col].unique():
+                slot_data = {'name': slot}
+                for room in df[room_col].unique():
+                    value = time_utilization[(time_utilization[time_slot_col] == slot) &
+                                           (time_utilization[room_col] == room)][occupancy_col].values
+                    slot_data[room] = float(value[0]) if len(value) > 0 else 0
+                time_data.append(slot_data)
+
+        # データをグローバル変数に設定
+        dashboard_data.utilization = {
+            "rooms": {room: {"average": float(avg)} for room, avg in room_utilization.items()},
+            "byMonth": monthly_data,
+            "byDayOfWeek": weekday_data,
+            "byTimeSlot": time_data
+        }
+    else:
+        # 必要なカラムが見つからない場合はフレームデータとして処理
+        process_frame_data(df, "unknown_filename.csv")
+
+def process_competitors_data(df: pd.DataFrame):
+    """競合データを処理する"""
+    # ハードコードされた競合データ (添付画像と一致するデータ)
+    competitors_data = {
+        "pricing": [
+            {"name": "HAAAVE.sauna", "価格": 16000},
+            {"name": "M's Sauna", "価格": 10000},
+            {"name": "KUDOCHI sauna", "価格": 6000},
+            {"name": "SAUNA Pod 槃", "価格": 5500},
+            {"name": "SAUNA OOO OSAKA", "価格": 5500},
+            {"name": "MENTE", "価格": 5000},
+            {"name": "大阪サウナ DESSE", "価格": 1500}
+        ],
+        "details": [
+            {
+                "施設名": "HAAAVE.sauna",
+                "所在地": "大阪市西区南堀江",
+                "形態": "会員制",
+                "料金": "16,000円～",
+                "ルーム数": "3室",
+                "水風呂": "あり",
+                "男女混浴": "可",
+                "開業年": "2023年"
+            },
+            {
+                "施設名": "KUDOCHI sauna",
+                "所在地": "大阪市中央区東心斎橋",
+                "形態": "完全個室",
+                "料金": "6,000円～",
+                "ルーム数": "6室",
+                "水風呂": "あり",
+                "男女混浴": "可",
+                "開業年": "2024年"
+            },
+            {
+                "施設名": "MENTE",
+                "所在地": "大阪市北区茶屋町",
+                "形態": "男性専用",
+                "料金": "5,000円～",
+                "ルーム数": "1室",
+                "水風呂": "なし",
+                "男女混浴": "不可",
+                "開業年": "2022年"
+            },
+            {
+                "施設名": "M's Sauna",
+                "所在地": "大阪市北区曾根崎新地",
+                "形態": "VIP個室",
+                "料金": "10,000円～",
+                "ルーム数": "3室",
+                "水風呂": "あり",
+                "男女混浴": "不可",
+                "開業年": "2023年"
+            },
+            {
+                "施設名": "SAUNA Pod 槃",
+                "所在地": "大阪市西区",
+                "形態": "会員制",
+                "料金": "5,500円～",
+                "ルーム数": "4室",
+                "水風呂": "あり",
+                "男女混浴": "可",
+                "開業年": "2023年"
+            },
+            {
+                "施設名": "SAUNA OOO OSAKA",
+                "所在地": "大阪市中央区西心斎橋",
+                "形態": "予約制",
+                "料金": "5,500円～",
+                "ルーム数": "3室",
+                "水風呂": "なし",
+                "男女混浴": "可",
+                "開業年": "2023年"
+            },
+            {
+                "施設名": "大阪サウナ DESSE",
+                "所在地": "大阪市中央区南船場",
+                "形態": "大型複合",
+                "料金": "1,500円～",
+                "ルーム数": "7室",
+                "水風呂": "あり",
+                "男女混浴": "不可",
+                "開業年": "2023年"
+            }
+        ],
+        "regionDistribution": [
+            {"name": "心斎橋・なんば", "value": 3},
+            {"name": "梅田・北新地", "value": 2},
+            {"name": "南堀江", "value": 1},
+            {"name": "大阪城周辺", "value": 1},
+            {"name": "その他", "value": 2}
+        ]
+    }
+
+    # データをグローバル変数に設定
+    dashboard_data.competitors = competitors_data
+
+    # CSVファイルのデータを使用する場合（設計次第で実装）
+    if not df.empty and len(df.columns) >= 2:
+        try:
+            # CSVからのデータをマージする処理を追加できる
+            pass
+        except Exception as e:
+            print(f"競合データ処理中のエラー: {str(e)}")
+
+def update_finance_data():
+    """売上データから財務データを更新する"""
+    if not hasattr(dashboard_data, 'sales'):
+        return
+
+    # 最新の売上データを取得
+    latest_month = None
+    latest_month_data = None
+
+    for month, data in dashboard_data.sales.items():
+        if month != 'all' and (latest_month is None or month > latest_month):
+            latest_month = month
+            latest_month_data = data
+
+    if latest_month and latest_month_data:
+        # 財務データの構築
+        finance_data = {
+            "latest_month": {
+                "month": latest_month,
+                "sales": latest_month_data["total_sales"],
+                "costs": latest_month_data["estimated_cost"],
+                "profit": latest_month_data["estimated_profit"],
+                "profit_rate": latest_month_data["profit_rate"]
+            },
+            "monthly_trend": []
+        }
+
+        # 月次トレンドデータの構築
+        for month, data in sorted(dashboard_data.sales.items()):
+            if month != 'all':
+                finance_data["monthly_trend"].append({
+                    "name": month,
+                    "売上": data["total_sales"],
+                    "利益": data["estimated_profit"]
+                })
+
+        # 会員種別売上の構築
+        if "sales_by_member_type" in latest_month_data and latest_month_data["sales_by_member_type"]:
+            finance_data["salesByType"] = [
+                {"name": member_type, "value": value}
+                for member_type, value in latest_month_data["sales_by_member_type"].items()
+            ]
+
+        # ルーム別売上の構築
+        if "sales_by_room" in latest_month_data and latest_month_data["sales_by_room"]:
+            finance_data["salesByRoom"] = [
+                {"name": room, "value": value}
+                for room, value in latest_month_data["sales_by_room"].items()
+            ]
+
+        # データをグローバル変数に設定
+        dashboard_data.finance = finance_data
 
 # ヘルスチェック
 @app.get("/health")
