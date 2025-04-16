@@ -1,0 +1,121 @@
+<div class="upload-form-container">
+  <h2>CSVファイルのアップロード</h2>
+  <form id="upload-form" enctype="multipart/form-data">
+    <div class="form-group">
+      <label for="data-type">データタイプ</label>
+      <select id="data-type" name="data_type" class="form-control">
+        <option value="auto">自動判定</option>
+        <option value="occupancy">稼働率データ</option>
+        <option value="sales">売上データ</option>
+        <option value="member">会員データ</option>
+        <option value="reservation">予約データ</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="csv-file">CSVファイル</label>
+      <input type="file" id="csv-file" name="file" accept=".csv" class="form-control-file" required>
+    </div>
+    <div class="selected-file" id="selected-file-info">
+      選択されたファイル: <span id="selected-filename">なし</span>
+    </div>
+    <div class="upload-error" id="upload-error"></div>
+    <div class="button-group">
+      <button type="button" id="cancel-button">キャンセル</button>
+      <button type="submit" id="upload-button">アップロード</button>
+    </div>
+  </form>
+</div>
+
+<!-- JavaScript for file upload handling -->
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('upload-form');
+    const fileInput = document.getElementById('csv-file');
+    const selectedFilename = document.getElementById('selected-filename');
+    const uploadError = document.getElementById('upload-error');
+    const cancelButton = document.getElementById('cancel-button');
+    const dataTypeSelect = document.getElementById('data-type');
+
+    // ファイル選択時の処理
+    fileInput.addEventListener('change', function() {
+      if (fileInput.files.length > 0) {
+        const filename = fileInput.files[0].name;
+        selectedFilename.textContent = filename;
+        uploadError.textContent = '';
+
+        // ファイル名に基づいてデータタイプを推測
+        if (filename.toLowerCase().includes('frame') || filename.toLowerCase().includes('occupancy')) {
+          dataTypeSelect.value = 'occupancy';
+        } else if (filename.toLowerCase().includes('sales')) {
+          dataTypeSelect.value = 'sales';
+        } else if (filename.toLowerCase().includes('member')) {
+          dataTypeSelect.value = 'member';
+        } else if (filename.toLowerCase().includes('reservation')) {
+          dataTypeSelect.value = 'reservation';
+        } else {
+          dataTypeSelect.value = 'auto';
+        }
+      } else {
+        selectedFilename.textContent = 'なし';
+      }
+    });
+
+    // キャンセルボタンのクリック処理
+    cancelButton.addEventListener('click', function() {
+      fileInput.value = '';
+      selectedFilename.textContent = 'なし';
+      uploadError.textContent = '';
+      dataTypeSelect.value = 'auto';
+    });
+
+    // フォーム送信時の処理
+    form.addEventListener('submit', function(event) {
+      event.preventDefault();
+
+      if (!fileInput.files.length) {
+        uploadError.textContent = 'ファイルを選択してください';
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      formData.append('data_type', dataTypeSelect.value);
+
+      // アップロードボタンを無効化
+      const uploadButton = document.getElementById('upload-button');
+      uploadButton.disabled = true;
+      uploadButton.textContent = 'アップロード中...';
+
+      // APIにアップロード
+      fetch('/api/upload-csv', {
+        method: 'POST',
+        body: formData
+      })
+      .then(response => {
+        if (!response.ok) {
+          return response.json().then(data => {
+            throw new Error(data.detail || 'アップロードに失敗しました');
+          });
+        }
+        return response.json();
+      })
+      .then(data => {
+        console.log('アップロード成功:', data);
+        alert('ファイルが正常にアップロードされました');
+        // フォームをリセット
+        form.reset();
+        selectedFilename.textContent = 'なし';
+        uploadError.textContent = '';
+      })
+      .catch(error => {
+        console.error('アップロードエラー:', error);
+        uploadError.textContent = error.message || 'アップロード中にエラーが発生しました';
+      })
+      .finally(() => {
+        // アップロードボタンを再有効化
+        uploadButton.disabled = false;
+        uploadButton.textContent = 'アップロード';
+      });
+    });
+  });
+</script>
