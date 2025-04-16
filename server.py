@@ -148,6 +148,20 @@ async def read_static(path: str, request: Request):
 @app.route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"])
 async def api_endpoint(request: Request, path: str):
     print(f"API直接リクエスト: {path}, メソッド: {request.method}")
+
+    # OPTIONSリクエストの場合、CORSヘッダーを直接返す
+    if request.method == "OPTIONS":
+        return JSONResponse(
+            status_code=200,
+            content={"allowed_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"]},
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH",
+                "Access-Control-Allow-Headers": "Content-Type, X-Requested-With",
+                "Content-Type": "application/json"
+            }
+        )
+
     try:
         # リクエストの本文を読み込む前にクローンを作成
         body = await request.body()
@@ -163,11 +177,26 @@ async def api_endpoint(request: Request, path: str):
         if is_multipart:
             print(f"マルチパートフォーム検出: {content_type}")
             # APIアプリに直接転送（本文は読み込まない）
-            return await api.app(request)
+            response = await api.app(request)
+            # レスポンスにCORSヘッダーを追加
+            if isinstance(response, JSONResponse):
+                # 既存のヘッダーを保持
+                headers = dict(response.headers)
+                # CORSヘッダーを追加
+                headers.update({
+                    "Access-Control-Allow-Origin": "*",
+                    "Content-Type": "application/json"
+                })
+                # 新しいレスポンスを作成
+                return JSONResponse(
+                    status_code=response.status_code,
+                    content=response.body,
+                    headers=headers
+                )
+            return response
         else:
             # 新しいリクエストを作成して転送
             from starlette.requests import Request as StarletteRequest
-            from starlette.datastructures import Headers
 
             # 新しいリクエストの作成
             new_request = StarletteRequest(
@@ -180,13 +209,34 @@ async def api_endpoint(request: Request, path: str):
             setattr(new_request, "_body", body)
 
             # APIアプリに転送
-            return await api.app(new_request)
+            response = await api.app(new_request)
+
+            # レスポンスにCORSヘッダーを追加
+            if isinstance(response, JSONResponse):
+                headers = dict(response.headers)
+                headers.update({
+                    "Access-Control-Allow-Origin": "*",
+                    "Content-Type": "application/json"
+                })
+                return JSONResponse(
+                    status_code=response.status_code,
+                    content=response.body,
+                    headers=headers
+                )
+            return response
 
     except Exception as e:
         print(f"APIエラー: {str(e)}")
         import traceback
         print(f"詳細トレース: {traceback.format_exc()}")
-        return JSONResponse({"error": str(e), "path": path, "method": request.method}, status_code=500)
+        return JSONResponse(
+            status_code=500,
+            content={"status": "エラー", "detail": str(e), "path": path, "method": request.method},
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Content-Type": "application/json"
+            }
+        )
 
 # 健全性チェック
 @app.get("/health")

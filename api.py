@@ -355,7 +355,8 @@ async def upload_csv_post(file: UploadFile = File(...), data_type: str = Form(de
         print(f"トレースバック: {traceback.format_exc()}")
         return JSONResponse(
             status_code=500,
-            content={"status": "エラー", "detail": str(e)}
+            content={"status": "エラー", "detail": str(e)},
+            headers={"Content-Type": "application/json"}
         )
 
 @app.put("/api/upload-csv")
@@ -371,21 +372,24 @@ async def upload_csv_put(file: UploadFile = File(...), data_type: str = Form(def
         print(f"トレースバック: {traceback.format_exc()}")
         return JSONResponse(
             status_code=500,
-            content={"status": "エラー", "detail": str(e)}
+            content={"status": "エラー", "detail": str(e)},
+            headers={"Content-Type": "application/json"}
         )
 
 @app.options("/api/upload-csv")
 async def upload_csv_options():
     """CSVファイルアップロードのOPTIONSリクエスト処理"""
     print("OPTIONS リクエスト受信: /api/upload-csv")
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, PUT, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, X-Requested-With",
+        "Content-Type": "application/json"
+    }
     return JSONResponse(
         status_code=200,
         content={"allowed_methods": ["POST", "PUT", "OPTIONS"]},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, PUT, OPTIONS",
-            "Access-Control-Allow-Headers": "*"
-        }
+        headers=headers
     )
 
 # テスト用エンドポイント（アップロードが動作しない場合に使用）
@@ -404,7 +408,8 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
         print("ファイルがアップロードされていません")
         return JSONResponse(
             status_code=400,
-            content={"status": "エラー", "detail": "ファイルがアップロードされていません"}
+            content={"status": "エラー", "detail": "ファイルがアップロードされていません"},
+            headers={"Content-Type": "application/json"}
         )
 
     print(f"CSVアップロードリクエスト受信: file={file.filename}, data_type={data_type}")
@@ -414,7 +419,8 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
         print(f"不正なファイル形式: {file.filename}")
         return JSONResponse(
             status_code=400,
-            content={"status": "エラー", "detail": "CSVファイルのみアップロード可能です"}
+            content={"status": "エラー", "detail": "CSVファイルのみアップロード可能です"},
+            headers={"Content-Type": "application/json"}
         )
 
     # テンポラリファイルに保存
@@ -429,7 +435,8 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
                 print("ファイルの内容が空です")
                 return JSONResponse(
                     status_code=400,
-                    content={"status": "エラー", "detail": "ファイルの内容が空です"}
+                    content={"status": "エラー", "detail": "ファイルの内容が空です"},
+                    headers={"Content-Type": "application/json"}
                 )
 
             print(f"ファイル読み込み完了: サイズ={len(contents)}バイト")
@@ -438,7 +445,8 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
             print(f"トレースバック: {traceback.format_exc()}")
             return JSONResponse(
                 status_code=400,
-                content={"status": "エラー", "detail": f"ファイルの読み込みに失敗しました: {str(e)}"}
+                content={"status": "エラー", "detail": f"ファイルの読み込みに失敗しました: {str(e)}"},
+                headers={"Content-Type": "application/json"}
             )
 
         # ファイル保存
@@ -450,7 +458,8 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
             print(f"ファイル保存エラー: {str(e)}")
             return JSONResponse(
                 status_code=500,
-                content={"status": "エラー", "detail": f"ファイルの保存に失敗しました: {str(e)}"}
+                content={"status": "エラー", "detail": f"ファイルの保存に失敗しました: {str(e)}"},
+                headers={"Content-Type": "application/json"}
             )
 
         # CSVの解析
@@ -488,7 +497,8 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
             print(f"CSVファイル解析失敗: {str(e)}")
             return JSONResponse(
                 status_code=400,
-                content={"status": "エラー", "detail": f"CSVファイルの解析に失敗しました: {str(e)}"}
+                content={"status": "エラー", "detail": f"CSVファイルの解析に失敗しました: {str(e)}"},
+                headers={"Content-Type": "application/json"}
             )
 
         # ファイル名から自動的にデータタイプを推測（frame_のファイルは稼働率データとして処理）
@@ -534,7 +544,8 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
                 print(f"無効なデータタイプ: {data_type}")
                 return JSONResponse(
                     status_code=400,
-                    content={"status": "エラー", "detail": "無効なデータタイプです"}
+                    content={"status": "エラー", "detail": "無効なデータタイプです"},
+                    headers={"Content-Type": "application/json"}
                 )
 
             print(f"CSVファイル処理成功: {file.filename}, タイプ={data_type}")
@@ -542,20 +553,23 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
             print(f"CSVファイル処理失敗: {str(e)}")
             return JSONResponse(
                 status_code=400,
-                content={"status": "エラー", "detail": str(e)}
+                content={"status": "エラー", "detail": str(e)},
+                headers={"Content-Type": "application/json"}
             )
 
         # 正常終了
         return JSONResponse(
             status_code=200,
-            content={"status": "成功", "data_type": data_type, "filename": file.filename}
+            content={"status": "成功", "data_type": data_type, "filename": file.filename},
+            headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"}
         )
 
     except Exception as e:
         print(f"ファイル処理中に予期せぬ例外が発生: {str(e)}")
         return JSONResponse(
             status_code=500,
-            content={"status": "エラー", "detail": f"ファイル処理中にエラーが発生しました: {str(e)}"}
+            content={"status": "エラー", "detail": f"ファイル処理中にエラーが発生しました: {str(e)}"},
+            headers={"Content-Type": "application/json"}
         )
     finally:
         # 一時ファイルの削除
