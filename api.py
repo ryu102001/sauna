@@ -350,7 +350,16 @@ async def upload_csv_post(file: UploadFile = File(...), data_type: str = Form(de
         print(f"POST CSV上アップロード開始: file={file.filename}, data_type={data_type}")
         result = await process_uploaded_csv(file, data_type)
         print(f"POST CSV処理結果: {result}")
-        return result
+
+        # この部分が重要: JSONResponseを返す場合、content_typeを明示的に設定
+        if isinstance(result, JSONResponse):
+            return result
+        else:
+            # 通常の辞書の場合はJSONResponseでラップ
+            return JSONResponse(
+                content=result,
+                headers={"Content-Type": "application/json"}
+            )
     except Exception as e:
         print(f"アップロードエラー(POST): {str(e)}")
         print(f"トレースバック: {traceback.format_exc()}")
@@ -360,16 +369,60 @@ async def upload_csv_post(file: UploadFile = File(...), data_type: str = Form(de
             headers={"Content-Type": "application/json"}
         )
 
-@app.put("/api/upload-csv")
-async def upload_csv_put(file: UploadFile = File(...), data_type: str = Form(default="auto")):
-    """CSVファイルをアップロードして処理する (PUTメソッド)"""
+@app.post("/api/upload-multiple-csv")
+async def upload_multiple_csv(files: List[UploadFile] = File(...), data_type: str = Form(default="auto")):
+    """複数のCSVファイルを一度にアップロードして処理する"""
     try:
-        print(f"PUT CSV上アップロード開始: file={file.filename}, data_type={data_type}")
-        result = await process_uploaded_csv(file, data_type)
-        print(f"PUT CSV処理結果: {result}")
-        return result
+        print(f"複数CSVアップロード開始: files数={len(files)}, data_type={data_type}")
+
+        results = []
+        errors = []
+
+        for file in files:
+            try:
+                print(f"ファイル処理開始: {file.filename}")
+                result = await process_uploaded_csv(file, data_type)
+
+                # JSONResponseオブジェクトから内容を取り出す
+                if isinstance(result, JSONResponse):
+                    # レスポンスの内容を取得
+                    content = result.body
+                    if isinstance(content, bytes):
+                        import json
+                        content = json.loads(content.decode('utf-8'))
+                    results.append({
+                        "filename": file.filename,
+                        "status": "成功",
+                        "detail": content
+                    })
+                else:
+                    # 通常の辞書の場合はそのまま追加
+                    results.append({
+                        "filename": file.filename,
+                        "status": "成功",
+                        "detail": result
+                    })
+            except Exception as e:
+                print(f"ファイル処理エラー: {file.filename}, エラー: {str(e)}")
+                errors.append({
+                    "filename": file.filename,
+                    "status": "エラー",
+                    "detail": str(e)
+                })
+
+        return JSONResponse(
+            content={
+                "status": "処理完了",
+                "total": len(files),
+                "success": len(results),
+                "errors": len(errors),
+                "results": results,
+                "error_details": errors
+            },
+            headers={"Content-Type": "application/json"}
+        )
     except Exception as e:
-        print(f"アップロードエラー(PUT): {str(e)}")
+        print(f"複数アップロードエラー: {str(e)}")
         print(f"トレースバック: {traceback.format_exc()}")
         return JSONResponse(
             status_code=500,
@@ -386,6 +439,11 @@ async def simple_upload(file: UploadFile = File(...)):
         contents = await file.read()
         file_size = len(contents)
 
+        # ファイルを保存
+        output_path = f"uploads/simple_{int(time.time())}_{file.filename}"
+        with open(output_path, "wb") as f:
+            f.write(contents)
+
         # 結果を返す
         return JSONResponse(
             content={
@@ -393,12 +451,62 @@ async def simple_upload(file: UploadFile = File(...)):
                 "filename": file.filename,
                 "content_type": file.content_type,
                 "size": file_size,
+                "saved_path": output_path,
                 "message": "ファイルが正常にアップロードされました"
             },
             headers={"Content-Type": "application/json"}
         )
     except Exception as e:
         print(f"シンプルアップロードエラー: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "エラー", "detail": str(e)},
+            headers={"Content-Type": "application/json"}
+        )
+
+# シンプルな複数ファイルアップロードエンドポイント（テスト用）
+@app.post("/api/simple-upload-multiple")
+async def simple_upload_multiple(files: List[UploadFile] = File(...)):
+    """シンプルな複数ファイルアップロードエンドポイント"""
+    try:
+        results = []
+        timestamp = int(time.time())
+
+        for file in files:
+            try:
+                # ファイル読み込み
+                contents = await file.read()
+                file_size = len(contents)
+
+                # ファイル保存
+                output_path = f"uploads/simple_multi_{timestamp}_{file.filename}"
+                with open(output_path, "wb") as f:
+                    f.write(contents)
+
+                # 結果追加
+                results.append({
+                    "filename": file.filename,
+                    "status": "成功",
+                    "size": file_size,
+                    "saved_path": output_path
+                })
+            except Exception as e:
+                results.append({
+                    "filename": file.filename,
+                    "status": "エラー",
+                    "detail": str(e)
+                })
+
+        return JSONResponse(
+            content={
+                "status": "処理完了",
+                "total": len(files),
+                "results": results
+            },
+            headers={"Content-Type": "application/json"}
+        )
+    except Exception as e:
+        print(f"複数シンプルアップロードエラー: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={"status": "エラー", "detail": str(e)},

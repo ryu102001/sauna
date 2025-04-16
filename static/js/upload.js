@@ -17,18 +17,25 @@ document.addEventListener('DOMContentLoaded', function() {
   // ファイル選択時の処理
   fileInput.addEventListener('change', function() {
     if (fileInput.files.length > 0) {
-      const filename = fileInput.files[0].name;
-      selectedFilename.textContent = filename;
+      // 複数ファイル対応
+      if (fileInput.files.length === 1) {
+        const filename = fileInput.files[0].name;
+        selectedFilename.textContent = filename;
+      } else {
+        selectedFilename.textContent = `${fileInput.files.length}個のファイルが選択されました`;
+      }
+
       uploadError.textContent = '';
 
-      // ファイル名からデータタイプを自動判定
-      if (filename.toLowerCase().includes('frame') || filename.toLowerCase().includes('occupancy')) {
+      // 最初のファイル名からデータタイプを自動判定
+      const firstFileName = fileInput.files[0].name.toLowerCase();
+      if (firstFileName.includes('frame') || firstFileName.includes('occupancy')) {
         dataTypeSelect.value = 'occupancy';
-      } else if (filename.toLowerCase().includes('sales')) {
+      } else if (firstFileName.includes('sales')) {
         dataTypeSelect.value = 'sales';
-      } else if (filename.toLowerCase().includes('member')) {
+      } else if (firstFileName.includes('member')) {
         dataTypeSelect.value = 'member';
-      } else if (filename.toLowerCase().includes('reservation')) {
+      } else if (firstFileName.includes('reservation')) {
         dataTypeSelect.value = 'reservation';
       } else {
         dataTypeSelect.value = 'auto';
@@ -56,70 +63,52 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-    // FormDataオブジェクトを作成
-    const formData = new FormData();
-    formData.append('file', fileInput.files[0]);
-    formData.append('data_type', dataTypeSelect.value);
-
     // ボタンを無効化
     uploadButton.disabled = true;
     uploadButton.textContent = 'アップロード中...';
     if (uploadProgress) uploadProgress.style.width = '0%';
 
-    // アップロード実行
-    uploadCSV(formData);
+    // 複数ファイルか単一ファイルかで処理を分岐
+    if (fileInput.files.length > 1) {
+      uploadMultipleFiles(fileInput.files, dataTypeSelect.value);
+    } else {
+      uploadSingleFile(fileInput.files[0], dataTypeSelect.value);
+    }
   });
 
-  // CSVアップロード処理
-  function uploadCSV(formData) {
-    // エラーログ用
-    console.log('アップロード開始:', {
-      file: formData.get('file').name,
-      type: formData.get('data_type')
-    });
+  // 単一ファイルアップロード処理
+  function uploadSingleFile(file, dataType) {
+    console.log('単一ファイルアップロード開始:', {file: file.name, type: dataType});
 
-    // シンプルテスト実行によるチェック（先に実行）
-    fetch('/api/test-upload')
-      .then(response => {
-        console.log('テストAPI応答ステータス:', response.status);
-        if (!response.ok) {
-          console.warn('テストAPIの応答が正常ではありません');
-        }
-        return response.json().catch(e => {
-          console.error('テストAPIのJSON解析エラー:', e);
-          return { status: 'エラー', detail: 'テストAPIレスポンスのJSONパースに失敗しました' };
-        });
-      })
-      .then(data => {
-        console.log('テストAPI応答:', data);
-      })
-      .catch(error => {
-        console.error('テストAPI呼び出しエラー:', error);
-      })
-      .finally(() => {
-        // 本番のアップロードを実行
-        performActualUpload(formData);
-      });
-  }
+    // FormDataオブジェクトを作成
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('data_type', dataType);
 
-  // 実際のアップロード処理
-  function performActualUpload(formData) {
+    // アップロード実行
     fetch('/api/upload-csv', {
       method: 'POST',
       body: formData
     })
     .then(response => {
-      console.log('アップロードAPIの応答ステータス:', response.status);
-      console.log('アップロードAPIのContent-Type:', response.headers.get('Content-Type'));
+      console.log('アップロードAPI応答:', response.status, response.statusText);
+      console.log('レスポンスヘッダ:', response.headers.get('Content-Type'));
 
-      // レスポンスがJSONでなければエラーを投げる
-      const contentType = response.headers.get('Content-Type');
-      if (!contentType || !contentType.includes('application/json')) {
-        throw new Error(`JSONレスポンスではありません (Content-Type: ${contentType})`);
+      if (!response.ok) {
+        return response.text().then(text => {
+          console.error('エラーレスポンス本文:', text);
+          try {
+            // JSONとしてパースを試みる
+            return JSON.parse(text);
+          } catch (e) {
+            // JSONパースに失敗した場合
+            throw new Error(`サーバーエラー (${response.status}): ${text}`);
+          }
+        });
       }
 
       return response.json().catch(e => {
-        console.error('JSON解析エラー:', e);
+        console.error('JSONパースエラー:', e);
         throw new Error('レスポンスのJSONパースに失敗しました');
       });
     })
@@ -127,7 +116,7 @@ document.addEventListener('DOMContentLoaded', function() {
       console.log('アップロード成功:', data);
 
       // 成功メッセージ表示
-      alert('ファイルが正常にアップロードされました');
+      alert(`ファイル「${file.name}」が正常にアップロードされました`);
 
       // フォームリセット
       uploadForm.reset();
@@ -142,9 +131,87 @@ document.addEventListener('DOMContentLoaded', function() {
       uploadError.textContent = error.message || 'アップロード中にエラーが発生しました';
       if (uploadProgress) uploadProgress.style.width = '0%';
 
-      // 簡易アップロードへのフォールバック提案
+      // シンプルアップロードへのフォールバック
       if (confirm('標準アップロードに失敗しました。シンプルモードで再試行しますか？')) {
-        useSimpleUpload(formData.get('file'));
+        useSimpleUpload(file);
+      }
+    })
+    .finally(() => {
+      // ボタン復活
+      uploadButton.disabled = false;
+      uploadButton.textContent = 'アップロード';
+    });
+  }
+
+  // 複数ファイルアップロード処理
+  function uploadMultipleFiles(files, dataType) {
+    console.log('複数ファイルアップロード開始:', {filesCount: files.length, type: dataType});
+
+    // FormDataオブジェクトを作成
+    const formData = new FormData();
+    for (let i = 0; i < files.length; i++) {
+      formData.append('files', files[i]);
+    }
+    formData.append('data_type', dataType);
+
+    // アップロード実行
+    fetch('/api/upload-multiple-csv', {
+      method: 'POST',
+      body: formData
+    })
+    .then(response => {
+      console.log('複数アップロードAPI応答:', response.status, response.statusText);
+
+      if (!response.ok) {
+        return response.text().then(text => {
+          console.error('エラーレスポンス本文:', text);
+          try {
+            // JSONとしてパースを試みる
+            return JSON.parse(text);
+          } catch (e) {
+            // JSONパースに失敗した場合
+            throw new Error(`サーバーエラー (${response.status}): ${text}`);
+          }
+        });
+      }
+
+      return response.json().catch(e => {
+        console.error('JSONパースエラー:', e);
+        throw new Error('レスポンスのJSONパースに失敗しました');
+      });
+    })
+    .then(data => {
+      console.log('複数アップロード成功:', data);
+
+      // 成功/失敗の件数を表示
+      let message = `${data.total}個中${data.success}個のファイルが正常にアップロードされました`;
+      if (data.errors > 0) {
+        message += `\n${data.errors}個のファイルでエラーが発生しました`;
+      }
+      alert(message);
+
+      // フォームリセット
+      uploadForm.reset();
+      selectedFilename.textContent = 'なし';
+      uploadError.textContent = '';
+      if (uploadProgress) uploadProgress.style.width = '100%';
+
+      // エラーがあった場合は表示
+      if (data.errors > 0 && data.error_details) {
+        const errorMessages = data.error_details.map(e => `${e.filename}: ${e.detail}`).join('\n');
+        uploadError.textContent = `一部のファイルでエラーが発生: ${errorMessages}`;
+      }
+    })
+    .catch(error => {
+      console.error('複数アップロードエラー:', error);
+
+      // エラーメッセージ表示
+      uploadError.textContent = error.message || '複数ファイルのアップロード中にエラーが発生しました';
+      if (uploadProgress) uploadProgress.style.width = '0%';
+
+      // シンプルアップロードへのフォールバック
+      if (confirm('標準アップロードに失敗しました。シンプルモードで再試行しますか？')) {
+        useSimpleUploadMultiple(files);
       }
     })
     .finally(() => {
@@ -171,7 +238,7 @@ document.addEventListener('DOMContentLoaded', function() {
     })
     .then(data => {
       console.log('シンプルアップロード成功:', data);
-      alert('シンプルモードでファイルがアップロードされました');
+      alert(`シンプルモードでファイル「${file.name}」がアップロードされました`);
 
       // フォームリセット
       uploadForm.reset();
@@ -180,6 +247,38 @@ document.addEventListener('DOMContentLoaded', function() {
     })
     .catch(error => {
       console.error('シンプルアップロードエラー:', error);
+      uploadError.textContent = 'すべてのアップロード方法が失敗しました: ' + error.message;
+    });
+  }
+
+  // 複数ファイルのシンプルアップロード
+  function useSimpleUploadMultiple(files) {
+    const simpleFormData = new FormData();
+    for (let i = 0; i < files.length; i++) {
+      simpleFormData.append('files', files[i]);
+    }
+
+    fetch('/api/simple-upload-multiple', {
+      method: 'POST',
+      body: simpleFormData
+    })
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('複数ファイルのシンプルアップロードに失敗しました');
+      }
+      return response.json();
+    })
+    .then(data => {
+      console.log('複数シンプルアップロード成功:', data);
+      alert(`シンプルモードで${data.total}個のファイルがアップロードされました`);
+
+      // フォームリセット
+      uploadForm.reset();
+      selectedFilename.textContent = 'なし';
+      uploadError.textContent = '';
+    })
+    .catch(error => {
+      console.error('複数シンプルアップロードエラー:', error);
       uploadError.textContent = 'すべてのアップロード方法が失敗しました: ' + error.message;
     });
   }
