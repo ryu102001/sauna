@@ -302,12 +302,26 @@ async def get_dashboard_data():
 @app.post("/api/upload-csv")
 async def upload_csv_post(file: UploadFile = File(...), data_type: str = Form(default="auto")):
     """CSVファイルをアップロードして処理する (POSTメソッド)"""
-    return await process_uploaded_csv(file, data_type)
+    try:
+        return await process_uploaded_csv(file, data_type)
+    except Exception as e:
+        print(f"アップロードエラー(POST): {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "エラー", "detail": str(e)}
+        )
 
 @app.put("/api/upload-csv")
 async def upload_csv_put(file: UploadFile = File(...), data_type: str = Form(default="auto")):
     """CSVファイルをアップロードして処理する (PUTメソッド)"""
-    return await process_uploaded_csv(file, data_type)
+    try:
+        return await process_uploaded_csv(file, data_type)
+    except Exception as e:
+        print(f"アップロードエラー(PUT): {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "エラー", "detail": str(e)}
+        )
 
 async def process_uploaded_csv(file: UploadFile, data_type: str):
     """CSVファイルをアップロードして処理する共通関数"""
@@ -315,24 +329,103 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
 
     # ファイル名の確認
     if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="CSVファイルのみアップロード可能です")
+        print(f"不正なファイル形式: {file.filename}")
+        return JSONResponse(
+            status_code=400,
+            content={"status": "エラー", "detail": "CSVファイルのみアップロード可能です"}
+        )
 
     # テンポラリファイルに保存
     temp_file = f"uploads/{file.filename}"
     os.makedirs(os.path.dirname(temp_file), exist_ok=True)
 
     try:
-        contents = await file.read()
-        with open(temp_file, 'wb') as f:
-            f.write(contents)
+        # ファイル読み込み
+        try:
+            contents = await file.read()
+            print(f"ファイル読み込み完了: サイズ={len(contents)}バイト")
+        except Exception as e:
+            print(f"ファイル読み込みエラー: {str(e)}")
+            return JSONResponse(
+                status_code=400,
+                content={"status": "エラー", "detail": f"ファイルの読み込みに失敗しました: {str(e)}"}
+            )
+
+        # ファイル保存
+        try:
+            with open(temp_file, 'wb') as f:
+                f.write(contents)
+            print(f"一時ファイル保存完了: {temp_file}")
+        except Exception as e:
+            print(f"ファイル保存エラー: {str(e)}")
+            return JSONResponse(
+                status_code=500,
+                content={"status": "エラー", "detail": f"ファイルの保存に失敗しました: {str(e)}"}
+            )
 
         # CSVの解析
         try:
-            df = pd.read_csv(temp_file)
+            # CSVを文字列として読み込み、エンコーディングを自動検出
+            with open(temp_file, 'rb') as f:
+                # まずUTF-8で試す
+                try:
+                    csv_str = f.read().decode('utf-8')
+                except UnicodeDecodeError:
+                    # UTF-8で失敗したらShift-JISで試す
+                    f.seek(0)
+                    try:
+                        csv_str = f.read().decode('shift-jis')
+                    except UnicodeDecodeError:
+                        # それでもダメなら、cp932で試す
+                        f.seek(0)
+                        csv_str = f.read().decode('cp932', errors='replace')
+
+            # StringIOを使ってpandasで読み込む
+            df = pd.read_csv(StringIO(csv_str))
             print(f"CSVファイル解析成功: {file.filename}, カラム={df.columns.tolist()}")
         except Exception as e:
             print(f"CSVファイル解析失敗: {str(e)}")
-            raise HTTPException(status_code=400, detail=f"CSVファイルの解析に失敗しました: {str(e)}")
+            return JSONResponse(
+                status_code=400,
+                content={"status": "エラー", "detail": f"CSVファイルの解析に失敗しました: {str(e)}"}
+            )
+
+        # カラムの確認（稼働率データの場合）
+        if data_type == 'utilization' or data_type == 'frame':
+            required_columns = ['date', 'room', 'occupancy_rate']
+            # 必須カラムの存在確認（日本語版も含む）
+            found_columns = []
+            for req_col in required_columns:
+                japanese_names = {
+                    'date': ['日付', '年月日'],
+                    'room': ['部屋', 'ルーム'],
+                    'occupancy_rate': ['稼働率', '利用率']
+                }
+
+                # 英語カラム名をチェック
+                if req_col in df.columns:
+                    found_columns.append(req_col)
+                    continue
+
+                # 日本語カラム名をチェック
+                for jp_name in japanese_names.get(req_col, []):
+                    if jp_name in df.columns:
+                        found_columns.append(req_col)
+                        break
+
+            # 必須カラムが見つからない場合
+            if len(found_columns) < len(required_columns):
+                missing = set(required_columns) - set(found_columns)
+                print(f"必須カラムがありません: {missing}")
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "status": "エラー",
+                        "detail": f"稼働率データのCSVには、date, room, occupancy_rate のカラムが必要です",
+                        "missing_columns": list(missing),
+                        "found_columns": df.columns.tolist()
+                    }
+                )
 
         # ファイル名から自動的にデータタイプを推測
         filename = file.filename.lower()
@@ -373,25 +466,38 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
                     process_finance_data(df)
             else:
                 print(f"無効なデータタイプ: {data_type}")
-                raise HTTPException(status_code=400, detail="無効なデータタイプです")
+                return JSONResponse(
+                    status_code=400,
+                    content={"status": "エラー", "detail": "無効なデータタイプです"}
+                )
 
             print(f"CSVファイル処理成功: {file.filename}, タイプ={data_type}")
         except Exception as e:
             print(f"CSVファイル処理失敗: {str(e)}")
-            raise HTTPException(status_code=400, detail=str(e))
+            return JSONResponse(
+                status_code=400,
+                content={"status": "エラー", "detail": str(e)}
+            )
 
         # 正常終了
-        return {"status": "成功", "data_type": data_type, "filename": file.filename}
+        return JSONResponse(
+            content={"status": "成功", "data_type": data_type, "filename": file.filename}
+        )
 
-    except HTTPException:
-        raise
     except Exception as e:
-        print(f"ファイル処理中に例外が発生: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"ファイル処理中にエラーが発生しました: {str(e)}")
+        print(f"ファイル処理中に予期せぬ例外が発生: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "エラー", "detail": f"ファイル処理中にエラーが発生しました: {str(e)}"}
+        )
     finally:
         # 一時ファイルの削除
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+                print(f"一時ファイル削除: {temp_file}")
+        except Exception as e:
+            print(f"一時ファイル削除エラー: {str(e)}")
 
 def process_members_data(df: pd.DataFrame, filename: str):
     """会員データを処理する"""
@@ -507,46 +613,127 @@ def process_reservation_data(df: pd.DataFrame, filename: str):
 
 def process_frame_data(df: pd.DataFrame, filename: str):
     """予約枠データを処理する"""
-    # ファイル名から年月を抽出
-    year_month_match = re.search(r'(\d{4})_(\d{2})', filename)
+    print(f"予約枠データ処理開始: {filename}, カラム={df.columns.tolist()}")
 
+    # 必須カラムのチェック
+    required_columns = ['date', 'room', 'status']
+    column_map = {}
+
+    # 列名のマッピング（英語と日本語の両方に対応）
+    for req_col in required_columns:
+        if req_col == 'date':
+            candidates = ['date', '日付', '年月日', '日', '予約日']
+        elif req_col == 'room':
+            candidates = ['room', '部屋', 'ルーム', '部屋名', 'room_name']
+        elif req_col == 'status':
+            candidates = ['status', '状態', '状況', '利用状況', '使用状況', '予約状況']
+
+        # 存在する列名を探す
+        for col in df.columns:
+            if col.lower() in [c.lower() for c in candidates]:
+                column_map[req_col] = col
+                break
+
+    # 見つからなかったカラムが存在する場合
+    missing_columns = [col for col in required_columns if col not in column_map]
+    if missing_columns:
+        print(f"必須カラムがありません: {missing_columns}, 実際のカラム: {df.columns.tolist()}")
+        # 必須カラムがない場合でも、最低限の処理を試みる
+        if 'date' not in column_map and len(df.columns) > 0:
+            # 日付っぽいカラムを探す
+            for col in df.columns:
+                try:
+                    pd.to_datetime(df[col])
+                    column_map['date'] = col
+                    print(f"日付カラムとして {col} を使用します")
+                    break
+                except:
+                    pass
+
+        if 'room' not in column_map and len(df.columns) > 1:
+            # 文字列のカラムを探す
+            for col in df.columns:
+                if col not in column_map.values() and df[col].dtype == 'object':
+                    column_map['room'] = col
+                    print(f"部屋カラムとして {col} を使用します")
+                    break
+
+        if 'status' not in column_map:
+            # 状態カラムがない場合は、すべて使用済みと仮定
+            print("状態カラムがありません。すべての枠を使用済みとして処理します。")
+
+    # ファイル名から年月を抽出
+    year_month_match = re.search(r'(\d{4})[-_]?(\d{2})', filename)
     if year_month_match:
         year = year_month_match.group(1)
         month = year_month_match.group(2)
         target_month = f"{year}-{month}"
+        print(f"ファイル名から年月を抽出: {target_month}")
     else:
-        # ファイル名から年月が取得できない場合、全データ対象とする
-        target_month = None
+        # ファイル名から年月が取得できない場合、データから抽出を試みる
+        if 'date' in column_map:
+            try:
+                date_col = column_map['date']
+                df[date_col] = pd.to_datetime(df[date_col])
+                dates = df[date_col].dt.strftime('%Y-%m').unique()
+                if len(dates) > 0:
+                    target_month = dates[0]
+                    print(f"データから年月を抽出: {target_month}")
+                else:
+                    target_month = "unknown"
+                    print("データから年月を抽出できませんでした")
+            except:
+                target_month = "unknown"
+                print("日付データの変換に失敗しました")
+        else:
+            target_month = "unknown"
+            print("年月を特定できません")
 
-    # 日付カラムの特定
-    date_col = next((col for col in df.columns if 'date' in col.lower() or '日付' in col), None)
-    # 部屋カラムの特定
-    room_col = next((col for col in df.columns if 'room' in col.lower() or '部屋' in col), None)
-    # 枠状態カラムの特定（利用可能かどうか）
-    status_col = next((col for col in df.columns if 'status' in col.lower() or '状態' in col or '利用' in col), None)
+    # データ処理
+    if 'date' in column_map and 'room' in column_map:
+        # 列名のマッピングを適用
+        df_mapped = df.copy()
+        for req_col, actual_col in column_map.items():
+            if req_col != actual_col:
+                df_mapped = df_mapped.rename(columns={actual_col: req_col})
 
-    if date_col and room_col:
+        # 日付データの変換（すでに変換済みの場合はスキップ）
+        if not pd.api.types.is_datetime64_any_dtype(df_mapped['date']):
+            try:
+                df_mapped['date'] = pd.to_datetime(df_mapped['date'])
+                print("日付データを変換しました")
+            except:
+                print("日付データの変換に失敗しましたが、処理を続行します")
+
         # 枠データからルームごとの利用可能枠数を計算
-        frames_by_room = df.groupby(room_col).size().to_dict()
+        frames_by_room = df_mapped.groupby('room').size().to_dict()
+        print(f"ルーム別総枠数: {frames_by_room}")
 
         # 状態カラムがある場合、利用済み枠数も計算
         used_frames = {}
-        if status_col:
-            used_values = ['used', '利用済み', '使用済', '予約済']
-            used_frames = df[df[status_col].isin(used_values)].groupby(room_col).size().to_dict()
+        if 'status' in column_map:
+            # 利用済みとみなす値のリスト（大文字小文字を区別しない）
+            used_values = ['used', '利用済み', '使用済', '予約済', '利用', '使用', '予約', '◯', '○', '×', 'o', 'x']
+            used_condition = df_mapped['status'].str.lower().isin([v.lower() for v in used_values])
+            used_frames = df_mapped[used_condition].groupby('room').size().to_dict()
+            print(f"ルーム別利用済み枠数: {used_frames}")
+        else:
+            # 状態カラムがない場合は、すべて使用済みと仮定
+            used_frames = frames_by_room.copy()
+            print("状態カラムがないため、すべてを利用済みとして処理します")
 
         # 稼働率計算（利用枠 / 総枠数）
         occupancy_rates = {}
         for room, total in frames_by_room.items():
             used = used_frames.get(room, 0)
             occupancy_rates[room] = (used / total) * 100 if total > 0 else 0
+        print(f"ルーム別稼働率: {occupancy_rates}")
 
         # データをグローバル変数に追加/更新
         if not hasattr(dashboard_data, 'frames'):
             dashboard_data.frames = {}
 
-        month_key = target_month if target_month else "all"
-        dashboard_data.frames[month_key] = {
+        dashboard_data.frames[target_month] = {
             "total_frames": frames_by_room,
             "used_frames": used_frames,
             "occupancy_rates": occupancy_rates
@@ -554,6 +741,8 @@ def process_frame_data(df: pd.DataFrame, filename: str):
 
         # 予約データと枠データを組み合わせて稼働率データを生成
         process_combined_utilization_data()
+    else:
+        print("必須カラム（日付または部屋）がないため、処理をスキップします")
 
 def process_combined_utilization_data():
     """予約データと枠データを組み合わせて稼働率を計算"""
