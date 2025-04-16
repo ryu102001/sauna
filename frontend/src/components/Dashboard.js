@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Users, Calendar, Target, BarChart2, TrendingUp, Download, Filter, RefreshCw, Menu, ChevronDown, Upload, DollarSign, Percent } from 'lucide-react';
+import { Activity, Users, Calendar, Target, BarChart2, TrendingUp, Download, Filter, RefreshCw, Menu, ChevronDown, Upload, DollarSign, Percent, PieChart } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, LineChart, Line, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 
 // カラーパレット
@@ -33,7 +33,7 @@ const PIE_COLORS = [
 ];
 
 // APIのベースURL
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 // レスポンシブカードコンポーネント
 const Card = ({ title, value, subValue, icon, color = COLORS.primary, className = '' }) => {
@@ -146,7 +146,7 @@ const CSVUploader = ({ onUploadSuccess }) => {
         console.log(`アップロード開始: ${file.name}, タイプ: ${dataType}`);
 
         // APIサーバーにファイルをアップロード
-        const response = await fetch(`http://localhost:8000/api/upload-csv`, {
+        const response = await fetch(`${API_BASE_URL}/api/upload-csv`, {
           method: 'POST',
           body: formData,
         });
@@ -342,7 +342,7 @@ const Dashboard = () => {
     const fetchData = async () => {
       try {
         setIsLoading(true);
-        const response = await fetch('http://localhost:8000/api/dashboard');
+        const response = await fetch(`${API_BASE_URL}/api/dashboard`);
         if (!response.ok) {
           throw new Error('APIからのデータ取得に失敗しました');
         }
@@ -373,7 +373,7 @@ const Dashboard = () => {
       // 数回再試行するようにする
       const fetchWithRetry = async (retryCount = 3) => {
         try {
-          const response = await fetch(`http://localhost:8000/api/dashboard?t=${new Date().getTime()}`);
+          const response = await fetch(`${API_BASE_URL}/api/dashboard?t=${new Date().getTime()}`);
           if (!response.ok) {
             throw new Error('APIからのデータ取得に失敗しました');
           }
@@ -403,7 +403,7 @@ const Dashboard = () => {
     try {
       setIsLoading(true);
       // キャッシュを回避するためのタイムスタンプ付きURLでデータを再取得
-      const response = await fetch(`http://localhost:8000/api/dashboard?t=${new Date().getTime()}`);
+      const response = await fetch(`${API_BASE_URL}/api/dashboard?t=${new Date().getTime()}`);
       if (!response.ok) {
         throw new Error('APIからのデータ取得に失敗しました');
       }
