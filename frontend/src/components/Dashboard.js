@@ -141,18 +141,24 @@ const CSVUploader = ({ onUploadSuccess }) => {
       for (const file of files) {
         const formData = new FormData();
         formData.append('file', file);
+        formData.append('data_type', dataType); // フォームデータとしてデータタイプを送信
 
-        const response = await fetch(`http://localhost:8000/api/upload-csv?data_type=${dataType}`, {
+        console.log(`アップロード開始: ${file.name}, タイプ: ${dataType}`);
+
+        // APIサーバーにファイルをアップロード
+        const response = await fetch(`http://localhost:8000/api/upload-csv`, {
           method: 'POST',
           body: formData,
         });
 
         if (!response.ok) {
           const errorData = await response.json();
+          console.error(`アップロードエラー: ${file.name}`, errorData);
           throw new Error(`${file.name}: ${errorData.detail || 'アップロードに失敗しました'}`);
         }
 
         const data = await response.json();
+        console.log(`アップロード成功: ${file.name}`, data);
         results.push({
           fileName: file.name,
           data
@@ -162,10 +168,14 @@ const CSVUploader = ({ onUploadSuccess }) => {
       setFiles([]);
       setShowUploader(false);
       setShowButtons(false);  // アップロード完了時にボタンを非表示
+      console.log("すべてのファイルのアップロード完了:", results);
+
+      // アップロード成功時にonUploadSuccessを呼び出し
       if (onUploadSuccess) {
         onUploadSuccess(results);
       }
     } catch (error) {
+      console.error("アップロードエラー:", error);
       setError(error.message);
     } finally {
       setUploading(false);
@@ -352,19 +362,53 @@ const Dashboard = () => {
 
   // CSVアップロード成功時の処理
   const handleUploadSuccess = () => {
-    // データを再取得
-    fetchData();
+    // データを再取得（遅延を入れる）
+    setIsLoading(true);
+    console.log("CSVアップロード成功！データを再取得します...");
+
+    // キャッシュを回避するためのタイムスタンプと少し遅延させてデータを再取得
+    setTimeout(() => {
+      console.log("データ再取得を開始します");
+
+      // 数回再試行するようにする
+      const fetchWithRetry = async (retryCount = 3) => {
+        try {
+          const response = await fetch(`http://localhost:8000/api/dashboard?t=${new Date().getTime()}`);
+          if (!response.ok) {
+            throw new Error('APIからのデータ取得に失敗しました');
+          }
+          const data = await response.json();
+          console.log("新しいデータを取得しました:", data);
+          setDashboardData(data);
+          setIsLoading(false);
+        } catch (error) {
+          console.error('APIエラー:', error);
+
+          if (retryCount > 0) {
+            console.log(`再試行します... (残り ${retryCount} 回)`);
+            setTimeout(() => fetchWithRetry(retryCount - 1), 1000);
+          } else {
+            console.error('再試行回数を超えました');
+            setIsLoading(false);
+          }
+        }
+      };
+
+      fetchWithRetry();
+    }, 2000); // 2秒遅延させる
   };
 
   // データ再取得関数 - リフレッシュボタン用
   const fetchData = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('http://localhost:8000/api/dashboard');
+      // キャッシュを回避するためのタイムスタンプ付きURLでデータを再取得
+      const response = await fetch(`http://localhost:8000/api/dashboard?t=${new Date().getTime()}`);
       if (!response.ok) {
         throw new Error('APIからのデータ取得に失敗しました');
       }
       const data = await response.json();
+      console.log("データを取得しました:", data);
       setDashboardData(data);
     } catch (error) {
       console.error('APIエラー:', error);
