@@ -278,24 +278,19 @@ def read_root():
 @app.get("/api/dashboard")
 async def get_dashboard_data():
     try:
-        # Pydantic v2対応
-        try:
-            # 直接dictを生成して返す（model_dumpやdictメソッドを使わない）
-            return JSONResponse(content={
-                "labels": dashboard_data.labels,
-                "metrics": dashboard_data.metrics,
-                "members": dashboard_data.members,
-                "utilization": dashboard_data.utilization,
-                "competitors": dashboard_data.competitors,
-                "finance": dashboard_data.finance
-            })
-        except Exception as e:
-            print(f"データの変換中にエラーが発生しました: {str(e)}")
-            # エラー時はダミーデータを返す
-            return JSONResponse(content=generate_dummy_data())
+        # 直接dictに変換して返す
+        data_dict = {
+            "labels": dashboard_data.labels,
+            "metrics": dashboard_data.metrics,
+            "members": dashboard_data.members,
+            "utilization": dashboard_data.utilization,
+            "competitors": dashboard_data.competitors,
+            "finance": dashboard_data.finance
+        }
+        return JSONResponse(content=data_dict)
     except Exception as e:
         print(f"ダッシュボードデータの取得中にエラーが発生しました: {str(e)}")
-        # 重大なエラーが発生した場合もダミーデータを返す
+        # エラー時はダミーデータを返す
         return JSONResponse(content=generate_dummy_data())
 
 @app.post("/api/upload-csv")
@@ -934,10 +929,11 @@ def update_finance_data():
 async def health_check():
     return {"status": "ok"}
 
-# アプリケーション起動時のログ
+# Lifespan contextを使用してスタートアップイベントを処理
 @app.on_event("startup")
 async def startup_event():
     print("API server has started")
+    # ここで必要なスタートアップ処理を行う
 
 # サーバー起動
 if __name__ == "__main__":
