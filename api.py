@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import numpy as np
@@ -7,21 +7,64 @@ import json
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import os
+import traceback
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 import uuid
 import random
 import re
 
 app = FastAPI(title="サウナ分析ダッシュボードAPI")
 
+# グローバル例外ハンドラの設定
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """HTTPExceptionをハンドリングし、一貫したJSON形式でレスポンスを返す"""
+    print(f"HTTPException: {exc.detail}, status_code={exc.status_code}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"status": "エラー", "detail": str(exc.detail)}
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """リクエスト検証エラーをハンドリングし、一貫したJSON形式でレスポンスを返す"""
+    error_details = str(exc)
+    print(f"バリデーションエラー: {error_details}")
+    return JSONResponse(
+        status_code=422,
+        content={
+            "status": "エラー",
+            "detail": "リクエストデータの検証に失敗しました",
+            "errors": error_details
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """すべての未処理例外をキャッチし、一貫したJSON形式でレスポンスを返す"""
+    error_details = str(exc)
+    trace = traceback.format_exc()
+    print(f"予期せぬエラー: {error_details}")
+    print(f"詳細トレース: {trace}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "エラー",
+            "detail": "サーバー内部エラーが発生しました",
+            "message": error_details
+        }
+    )
+
 # CORSを有効にして、Reactからのリクエストを許可
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Reactフロントエンドのオリジン
+    allow_origins=["*"],  # すべてのオリジンを許可
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # すべてのHTTPメソッドを許可
+    allow_headers=["*"],  # すべてのヘッダーを許可
 )
 
 # アップロードされたCSVファイルを保存するディレクトリ
@@ -306,6 +349,7 @@ async def upload_csv_post(file: UploadFile = File(...), data_type: str = Form(de
         return await process_uploaded_csv(file, data_type)
     except Exception as e:
         print(f"アップロードエラー(POST): {str(e)}")
+        print(f"トレースバック: {traceback.format_exc()}")
         return JSONResponse(
             status_code=500,
             content={"status": "エラー", "detail": str(e)}
@@ -318,6 +362,7 @@ async def upload_csv_put(file: UploadFile = File(...), data_type: str = Form(def
         return await process_uploaded_csv(file, data_type)
     except Exception as e:
         print(f"アップロードエラー(PUT): {str(e)}")
+        print(f"トレースバック: {traceback.format_exc()}")
         return JSONResponse(
             status_code=500,
             content={"status": "エラー", "detail": str(e)}
@@ -325,10 +370,17 @@ async def upload_csv_put(file: UploadFile = File(...), data_type: str = Form(def
 
 async def process_uploaded_csv(file: UploadFile, data_type: str):
     """CSVファイルをアップロードして処理する共通関数"""
+    if not file:
+        print("ファイルがアップロードされていません")
+        return JSONResponse(
+            status_code=400,
+            content={"status": "エラー", "detail": "ファイルがアップロードされていません"}
+        )
+
     print(f"CSVアップロードリクエスト受信: file={file.filename}, data_type={data_type}")
 
     # ファイル名の確認
-    if not file.filename.endswith('.csv'):
+    if not file.filename or not file.filename.endswith('.csv'):
         print(f"不正なファイル形式: {file.filename}")
         return JSONResponse(
             status_code=400,
@@ -343,9 +395,17 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
         # ファイル読み込み
         try:
             contents = await file.read()
+            if not contents:
+                print("ファイルの内容が空です")
+                return JSONResponse(
+                    status_code=400,
+                    content={"status": "エラー", "detail": "ファイルの内容が空です"}
+                )
+
             print(f"ファイル読み込み完了: サイズ={len(contents)}バイト")
         except Exception as e:
             print(f"ファイル読み込みエラー: {str(e)}")
+            print(f"トレースバック: {traceback.format_exc()}")
             return JSONResponse(
                 status_code=400,
                 content={"status": "エラー", "detail": f"ファイルの読み込みに失敗しました: {str(e)}"}

@@ -149,10 +149,44 @@ async def read_static(path: str, request: Request):
 async def api_endpoint(request: Request, path: str):
     print(f"API直接リクエスト: {path}, メソッド: {request.method}")
     try:
-        return await api.app(request)
+        # リクエストの本文を読み込む前にクローンを作成
+        body = await request.body()
+
+        # 新しいリクエストスコープの作成
+        new_scope = request.scope.copy()
+        new_scope["path"] = "/" + path  # APIのパスを変更
+
+        # マルチパートデータの場合の特別な処理
+        content_type = request.headers.get("content-type", "")
+        is_multipart = content_type.startswith("multipart/form-data")
+
+        if is_multipart:
+            print(f"マルチパートフォーム検出: {content_type}")
+            # APIアプリに直接転送（本文は読み込まない）
+            return await api.app(request)
+        else:
+            # 新しいリクエストを作成して転送
+            from starlette.requests import Request as StarletteRequest
+            from starlette.datastructures import Headers
+
+            # 新しいリクエストの作成
+            new_request = StarletteRequest(
+                scope=new_scope,
+                receive=request._receive,
+                send=request._send
+            )
+
+            # 本文をセット
+            setattr(new_request, "_body", body)
+
+            # APIアプリに転送
+            return await api.app(new_request)
+
     except Exception as e:
         print(f"APIエラー: {str(e)}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        import traceback
+        print(f"詳細トレース: {traceback.format_exc()}")
+        return JSONResponse({"error": str(e), "path": path, "method": request.method}, status_code=500)
 
 # 健全性チェック
 @app.get("/health")

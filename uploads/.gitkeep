@@ -1,2 +1,4 @@
 # アップロードディレクトリを確実にGitに含めるためのダミーファイル
 # This file is used to ensure the uploads directory is included in Git
+# サーバー起動時に uploads ディレクトリの権限を 777 に設定することで書き込み権限を確保
+# Set permissions to 777 on startup to ensure write access
