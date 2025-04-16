@@ -376,6 +376,34 @@ async def upload_csv_put(file: UploadFile = File(...), data_type: str = Form(def
             headers={"Content-Type": "application/json"}
         )
 
+# シンプルなファイルアップロードエンドポイント（テスト用）
+@app.post("/api/simple-upload")
+async def simple_upload(file: UploadFile = File(...)):
+    """シンプルなファイルアップロードエンドポイント"""
+    try:
+        # ファイル名とサイズを取得
+        contents = await file.read()
+        file_size = len(contents)
+
+        # 結果を返す
+        return JSONResponse(
+            content={
+                "status": "成功",
+                "filename": file.filename,
+                "content_type": file.content_type,
+                "size": file_size,
+                "message": "ファイルが正常にアップロードされました"
+            },
+            headers={"Content-Type": "application/json"}
+        )
+    except Exception as e:
+        print(f"シンプルアップロードエラー: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "エラー", "detail": str(e)},
+            headers={"Content-Type": "application/json"}
+        )
+
 @app.options("/api/upload-csv")
 async def upload_csv_options():
     """CSVファイルアップロードのOPTIONSリクエスト処理"""
@@ -399,7 +427,8 @@ async def test_upload():
     print("テストアップロードエンドポイント呼び出し")
     return JSONResponse(
         status_code=200,
-        content={"status": "成功", "message": "アップロードエンドポイントが正常に動作しています"}
+        content={"status": "成功", "message": "アップロードエンドポイントが正常に動作しています"},
+        headers={"Content-Type": "application/json"}
     )
 
 async def process_uploaded_csv(file: UploadFile, data_type: str):

@@ -163,75 +163,48 @@ async def api_endpoint(request: Request, path: str):
         )
 
     try:
-        # リクエストの本文を読み込む前にクローンを作成
-        body = await request.body()
-
-        # 新しいリクエストスコープの作成
-        new_scope = request.scope.copy()
-        new_scope["path"] = "/" + path  # APIのパスを変更
-
         # マルチパートデータの場合の特別な処理
         content_type = request.headers.get("content-type", "")
-        is_multipart = content_type.startswith("multipart/form-data")
+        print(f"リクエストContent-Type: {content_type}")
 
-        if is_multipart:
-            print(f"マルチパートフォーム検出: {content_type}")
-            # APIアプリに直接転送（本文は読み込まない）
-            response = await api.app(request)
-            # レスポンスにCORSヘッダーを追加
-            if isinstance(response, JSONResponse):
-                # 既存のヘッダーを保持
-                headers = dict(response.headers)
-                # CORSヘッダーを追加
-                headers.update({
-                    "Access-Control-Allow-Origin": "*",
-                    "Content-Type": "application/json"
-                })
-                # 新しいレスポンスを作成
-                return JSONResponse(
-                    status_code=response.status_code,
-                    content=response.body,
-                    headers=headers
-                )
-            return response
-        else:
-            # 新しいリクエストを作成して転送
-            from starlette.requests import Request as StarletteRequest
+        # APIへ直接転送（パスを修正）
+        new_path = "/" + path
+        print(f"APIへ転送: パス={new_path}")
 
-            # 新しいリクエストの作成
-            new_request = StarletteRequest(
-                scope=new_scope,
-                receive=request._receive,
-                send=request._send
-            )
+        # 直接APIアプリへリクエストを転送し、レスポンスをそのまま返す
+        from starlette.datastructures import Headers
 
-            # 本文をセット
-            setattr(new_request, "_body", body)
+        # 新しいスコープを作成して直接転送
+        scope = {
+            "type": "http",
+            "http_version": "1.1",
+            "method": request.method,
+            "path": new_path,
+            "root_path": "",
+            "scheme": request.url.scheme,
+            "query_string": request.url.query.encode(),
+            "headers": [(k.lower().encode(), v.encode()) for k, v in request.headers.items()],
+            "client": request.scope.get("client", None),
+            "server": request.scope.get("server", None),
+        }
 
-            # APIアプリに転送
-            response = await api.app(new_request)
-
-            # レスポンスにCORSヘッダーを追加
-            if isinstance(response, JSONResponse):
-                headers = dict(response.headers)
-                headers.update({
-                    "Access-Control-Allow-Origin": "*",
-                    "Content-Type": "application/json"
-                })
-                return JSONResponse(
-                    status_code=response.status_code,
-                    content=response.body,
-                    headers=headers
-                )
-            return response
+        # レスポンスを直接受け取り、受け渡す
+        res = await api.app(scope, request._receive, request._send)
+        return res
 
     except Exception as e:
         print(f"APIエラー: {str(e)}")
         import traceback
-        print(f"詳細トレース: {traceback.format_exc()}")
+        trace = traceback.format_exc()
+        print(f"詳細トレース: {trace}")
         return JSONResponse(
             status_code=500,
-            content={"status": "エラー", "detail": str(e), "path": path, "method": request.method},
+            content={
+                "status": "エラー",
+                "detail": f"リクエスト処理中にエラーが発生しました: {str(e)}",
+                "path": path,
+                "method": request.method
+            },
             headers={
                 "Access-Control-Allow-Origin": "*",
                 "Content-Type": "application/json"
