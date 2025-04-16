@@ -37,8 +37,8 @@ const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 // APIパス
 const API_PATHS = {
-  dashboard: `${API_BASE_URL}/api/api/dashboard`,
-  upload: `${API_BASE_URL}/api/api/upload-csv`
+  dashboard: `/api/dashboard`,
+  upload: `/api/upload-csv`
 };
 
 // レスポンシブカードコンポーネント
