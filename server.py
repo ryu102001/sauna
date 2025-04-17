@@ -3,7 +3,7 @@ import sys
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, HTMLResponse
 import api  # 既存のAPIモジュールをインポート
 
 # Streamlitコマンドの検出（--server.portなどの引数がある場合）
@@ -21,24 +21,6 @@ PORT = int(os.environ.get("PORT", 8000))
 
 # 新しいFastAPIアプリを作成
 app = FastAPI()
-
-# CORSミドルウェアを追加（すべてのオリジンを許可）
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # すべてのオリジンを許可
-    allow_credentials=True,
-    allow_methods=["*"],  # すべてのHTTPメソッドを許可
-    allow_headers=["*"],  # すべてのヘッダーを許可
-)
-
-# APIのCORS設定も更新
-api.app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # すべてのオリジンを許可
-    allow_credentials=True,
-    allow_methods=["*"],  # すべてのHTTPメソッドを許可
-    allow_headers=["*"],  # すべてのヘッダーを許可
-)
 
 # Render環境かどうかを確認
 is_render = os.environ.get("RENDER", "").lower() == "true"
@@ -104,6 +86,34 @@ if not os.path.exists(static_dir):
         if os.path.exists('frontend/build'):
             print(f"Frontend buildディレクトリ内容: {os.listdir('frontend/build')}")
 
+# Render環境でのデバッグ情報を追加
+print(f"Current directory: {os.getcwd()}")
+print(f"Directory contents: {os.listdir('.')}")
+if os.path.exists('static'):
+    print(f"Static directory contents: {os.listdir('static')}")
+if os.path.exists('frontend'):
+    print(f"Frontend directory contents: {os.listdir('frontend')}")
+    if os.path.exists('frontend/build'):
+        print(f"Frontend build contents: {os.listdir('frontend/build')}")
+
+# CORSミドルウェアを追加（すべてのオリジンを許可）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # すべてのオリジンを許可
+    allow_credentials=True,
+    allow_methods=["*"],  # すべてのHTTPメソッドを許可
+    allow_headers=["*"],  # すべてのヘッダーを許可
+)
+
+# APIのCORS設定も更新
+api.app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # すべてのオリジンを許可
+    allow_credentials=True,
+    allow_methods=["*"],  # すべてのHTTPメソッドを許可
+    allow_headers=["*"],  # すべてのヘッダーを許可
+)
+
 # APIの全エンドポイントをサブパスにマウント
 try:
     # ここでルートパスを空にリセット
@@ -120,10 +130,13 @@ def check_file_exists(file_path):
     return False
 
 # ルートパスへのリクエストをindex.htmlにリダイレクト
-@app.get("/")
+@app.get("/", response_class=FileResponse)
 async def read_index():
     index_path = os.path.join(static_dir, "index.html")
+    print(f"リクエスト: / -> {index_path}")
+
     if check_file_exists(index_path):
+        print(f"ファイル配信: {index_path}")
         return FileResponse(index_path)
     else:
         # index.htmlが見つからない場合は、ファイル作成のためのロジックを追加
@@ -138,40 +151,47 @@ async def read_index():
                 print(f"フォールバックindex.htmlを使用: {fallback_path}")
                 return FileResponse(fallback_path)
 
-        # それでも見つからない場合は、簡易なHTMLページを作成して返す
-        if is_render and os.path.exists('static') and os.path.exists(os.path.join('static', 'js')):
-            print("簡易index.htmlを生成")
-            # staticディレクトリにJSファイルのみある場合、簡易HTMLを作成
-            js_files = [f for f in os.listdir(os.path.join('static', 'js')) if f.endswith('.js')]
-
-            if js_files:
-                html_content = f"""
-                <!DOCTYPE html>
-                <html lang="ja">
-                <head>
-                    <meta charset="utf-8">
-                    <meta name="viewport" content="width=device-width, initial-scale=1">
-                    <title>サウナ分析ダッシュボード</title>
-                </head>
-                <body>
-                    <div id="root"></div>
-                    <script src="/static/js/{js_files[0]}"></script>
-                </body>
-                </html>
-                """
-
-                # 一時的なindex.htmlファイルを作成
-                try:
-                    with open(os.path.join('static', 'index.html'), 'w', encoding='utf-8') as f:
-                        f.write(html_content)
-                    print("簡易index.htmlを保存しました")
-                    return FileResponse(os.path.join('static', 'index.html'))
-                except Exception as e:
-                    print(f"index.htmlの作成に失敗: {str(e)}")
-
-        error_message = f"index.htmlが見つかりません。パス: {index_path}, ディレクトリ内容: {os.listdir(static_dir) if os.path.exists(static_dir) else '不明'}"
-        print(error_message)
-        return JSONResponse({"error": error_message}, status_code=404)
+        # それでも見つからない場合は、簡易なHTMLを直接返す
+        print("簡易HTMLを返します")
+        html_content = """
+        <!DOCTYPE html>
+        <html lang="ja">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>サウナ分析ダッシュボード</title>
+            <style>
+                body { font-family: sans-serif; margin: 0; padding: 20px; }
+                #root { max-width: 1200px; margin: 0 auto; }
+                h1 { color: #333; }
+            </style>
+        </head>
+        <body>
+            <div id="root">
+                <h1>サウナ分析ダッシュボード</h1>
+                <p>APIステータス:
+                    <span id="api-status">確認中...</span>
+                </p>
+                <script>
+                    fetch('/api/dashboard')
+                        .then(response => {
+                            document.getElementById('api-status').textContent =
+                                response.ok ? '接続成功' : 'エラー: ' + response.status;
+                            return response.json();
+                        })
+                        .then(data => {
+                            console.log('API応答:', data);
+                        })
+                        .catch(err => {
+                            document.getElementById('api-status').textContent = 'エラー: ' + err.message;
+                            console.error('API接続エラー:', err);
+                        });
+                </script>
+            </div>
+        </body>
+        </html>
+        """
+        return HTMLResponse(content=html_content)
 
 # 静的ファイルを提供
 @app.get("/{path:path}")
@@ -525,12 +545,15 @@ async def handle_api_request(request: Request, path: str):
 async def health_check():
     return {"status": "ok", "env": os.environ.get("PYTHON_ENV", "development")}
 
+# メイン関数
 if __name__ == "__main__":
-    # サーバー起動
-    print(f"Starting server on port {PORT} with static dir: {os.path.abspath(static_dir)}")
-    # Renderデプロイ情報
-    if is_render:
-        print(f"Render環境で実行中: {os.environ.get('RENDER_SERVICE_ID', '不明')}")
-        print(f"ディレクトリ構造: {os.listdir('.')}")
+    port = int(os.environ.get("PORT", 8000))
 
-    uvicorn.run("server:app", host="0.0.0.0", port=PORT)
+    print(f"\n{'='*50}")
+    print(f"サーバー起動情報:")
+    print(f"ポート: {port}")
+    print(f"静的ファイルディレクトリ: {os.path.abspath(static_dir)}")
+    print(f"Render環境: {is_render}")
+    print(f"{'='*50}\n")
+
+    uvicorn.run(app, host="0.0.0.0", port=port)
