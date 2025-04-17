@@ -198,15 +198,41 @@ async def read_index():
 async def read_static(path: str, request: Request):
     print(f"リクエストパス: {path}")
 
+    # 明示的に処理するパスのマッピング
+    special_paths = {
+        "manifest.json": {"content_type": "application/json", "paths": [
+            os.path.join(static_dir, "manifest.json"),
+            os.path.join("frontend", "build", "manifest.json"),
+            os.path.join("public", "manifest.json")
+        ]},
+        "favicon.ico": {"content_type": "image/x-icon", "paths": [
+            os.path.join(static_dir, "favicon.ico"),
+            os.path.join("frontend", "build", "favicon.ico"),
+            os.path.join("public", "favicon.ico")
+        ]}
+    }
+
+    # 特別なパスの場合
+    if path in special_paths:
+        for try_path in special_paths[path]["paths"]:
+            if check_file_exists(try_path):
+                print(f"特別なパス配信: {try_path} ({special_paths[path]['content_type']})")
+                return FileResponse(
+                    try_path,
+                    media_type=special_paths[path]["content_type"],
+                    headers={
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                        "Access-Control-Allow-Headers": "Content-Type, X-Requested-With",
+                        "Cache-Control": "no-cache, no-store, must-revalidate"
+                    }
+                )
+
     # APIパスはスキップしてAPIモジュールに転送
     if path.startswith("api/"):
         print(f"APIリクエスト転送: {path}")
 
-        # ※ 核心部分： api/dashboard のような形式は /api/dashboard に変換し、直接処理
-        # APIエンドポイントが元々 /api/ で始まるように定義されているため、
-        # 単純に pathから先頭の api/ を除去して、適切に/api/を付加
-
-        # 修正バージョン：send_wrapperなどの処理を使用して適切に呼び出す
+        # 核心部分： api/dashboard のような形式は /api/dashboard に変換し、直接処理
         scope = {
             "type": "http",
             "http_version": "1.1",
@@ -232,6 +258,8 @@ async def read_static(path: str, request: Request):
 
                 # CORSヘッダーを追加
                 headers[b"access-control-allow-origin"] = b"*"
+                headers[b"access-control-allow-methods"] = b"GET, POST, PUT, DELETE, OPTIONS"
+                headers[b"access-control-allow-headers"] = b"Content-Type, X-Requested-With"
 
                 # Content-Typeがない場合は必ず追加
                 if b"content-type" not in headers:
@@ -281,25 +309,51 @@ async def read_static(path: str, request: Request):
     # ファイルが存在するか確認
     if check_file_exists(file_path):
         print(f"ファイル配信: {file_path} (Content-Type: {content_type})")
-        return FileResponse(file_path, media_type=content_type)
+        return FileResponse(
+            file_path,
+            media_type=content_type,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
+            }
+        )
 
     # 静的アセットとして明確なパスをチェック
     asset_paths = [
         os.path.join(static_dir, "static", "js", path),
         os.path.join(static_dir, "static", "css", path),
-        os.path.join(static_dir, "static", "media", path)
+        os.path.join(static_dir, "static", "media", path),
+        os.path.join("frontend", "build", path),
+        os.path.join("frontend", "build", "static", "js", path),
+        os.path.join("frontend", "build", "static", "css", path)
     ]
 
     for asset_path in asset_paths:
         if check_file_exists(asset_path):
             print(f"アセット配信: {asset_path}")
-            return FileResponse(asset_path, media_type=content_type)
+            return FileResponse(
+                asset_path,
+                media_type=content_type,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
+                }
+            )
 
     # ファイルが存在しない場合はindex.htmlを返す（SPA対応）
     index_path = os.path.join(static_dir, "index.html")
     if check_file_exists(index_path):
         print(f"SPA対応: {path} → index.html")
-        return FileResponse(index_path)
+        return FileResponse(
+            index_path,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
+            }
+        )
 
     # それでもダメなら404
     error_message = f"ファイルが見つかりません: {path}"
