@@ -37,9 +37,9 @@ const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 // APIエンドポイントのパス設定
 const API_PATHS = {
-  dashboard: window.location.origin.includes("localhost") ? "http://localhost:8001/api/dashboard" : "/api/dashboard",
-  uploadCsv: window.location.origin.includes("localhost") ? "http://localhost:8001/api/upload-csv" : "/api/upload-csv",
-  resetDashboard: window.location.origin.includes("localhost") ? "http://localhost:8001/api/reset-dashboard" : "/api/reset-dashboard",
+  dashboard: window.location.origin.includes("localhost") ? "http://localhost:8000/api/dashboard" : "/api/dashboard",
+  uploadCsv: window.location.origin.includes("localhost") ? "http://localhost:8000/api/upload-csv" : "/api/upload-csv",
+  resetDashboard: window.location.origin.includes("localhost") ? "http://localhost:8000/api/reset-dashboard" : "/api/reset-dashboard",
 };
 
 // デバッグログを追加

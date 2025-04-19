@@ -666,7 +666,9 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
                 content={"status": "エラー", "detail": error_msg},
                 headers={
                     "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*"
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "POST, PUT, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
                 }
             )
 
@@ -760,6 +762,9 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
                 )
 
             # ここからフォーマット別の処理
+            processed_df = None
+
+            # フォーマット別の処理を実行
             if detected_format == "lesson":
                 # レッスンデータの処理
                 print("レッスンデータフォーマットを処理します")
@@ -943,6 +948,9 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
                     min_date = "不明"
                     max_date = "不明"
 
+                # processed_dfをグローバルのdashboard_dataに反映
+                update_dashboard_with_occupancy_data(processed_df)
+
                 return JSONResponse(
                     content={
                         "status": "成功",
@@ -1089,6 +1097,9 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
                     min_date = "不明"
                     max_date = "不明"
 
+                # processed_dfをグローバルのdashboard_dataに反映
+                update_dashboard_with_occupancy_data(processed_df)
+
                 return JSONResponse(
                     content={
                         "status": "成功",
@@ -1226,6 +1237,9 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
                     min_date = "不明"
                     max_date = "不明"
 
+                # processed_dfをグローバルのdashboard_dataに反映
+                update_dashboard_with_occupancy_data(processed_df)
+
                 return JSONResponse(
                     content={
                         "status": "成功",
@@ -1264,6 +1278,152 @@ async def process_uploaded_csv(file: UploadFile, data_type: str):
             content={"status": "エラー", "detail": str(e), "traceback": traceback_str},
             headers={"Content-Type": "application/json"}
         )
+
+# 稼働率データをダッシュボードに反映する関数
+def update_dashboard_with_occupancy_data(occupancy_df):
+    """
+    アップロードされた稼働率データをグローバルのdashboard_dataに反映する関数
+
+    Args:
+        occupancy_df: 日付、ルーム、稼働率のカラムを含むDataFrame
+    """
+    global dashboard_data
+
+    try:
+        print("ダッシュボードデータの稼働率情報を更新します")
+
+        # utilizationが初期化されていない場合は初期化
+        if not dashboard_data.utilization:
+            dashboard_data.utilization = {}
+
+        # 月別稼働率データを初期化/更新
+        if "byMonth" not in dashboard_data.utilization:
+            dashboard_data.utilization["byMonth"] = []
+
+        # 曜日別稼働率データを初期化/更新
+        if "byDayOfWeek" not in dashboard_data.utilization:
+            dashboard_data.utilization["byDayOfWeek"] = []
+            for day in dashboard_data.labels["daysOfWeek"]:
+                dashboard_data.utilization["byDayOfWeek"].append({
+                    "name": day,
+                    "Room1": 0,
+                    "Room2": 0,
+                    "Room3": 0
+                })
+
+        # 時間帯別稼働率データを初期化/更新
+        if "byTimeSlot" not in dashboard_data.utilization:
+            dashboard_data.utilization["byTimeSlot"] = []
+            for slot in dashboard_data.labels["timeSlots"]:
+                dashboard_data.utilization["byTimeSlot"].append({
+                    "name": slot,
+                    "Room1": 0,
+                    "Room2": 0,
+                    "Room3": 0
+                })
+
+        # 全体サマリーデータを初期化/更新
+        if "summary" not in dashboard_data.utilization:
+            dashboard_data.utilization["summary"] = {
+                "overall": 0,
+                "byRoom": {"Room1": 0, "Room2": 0, "Room3": 0}
+            }
+
+        # 入力データを確認
+        if occupancy_df is None or len(occupancy_df) == 0:
+            print("警告: 稼働率データが空です")
+            return
+
+        # 日付型に変換
+        try:
+            occupancy_df['date'] = pd.to_datetime(occupancy_df['date'])
+        except Exception as e:
+            print(f"日付変換エラー: {e}")
+            # 既に変換済みの場合はスキップ
+            pass
+
+        # 月別データの作成
+        monthly_data = {}
+        for month in dashboard_data.labels["months"]:
+            monthly_data[month] = {"Room1": [], "Room2": [], "Room3": []}
+
+        # 曜日のマッピング
+        weekday_mapping = {
+            0: "月", 1: "火", 2: "水", 3: "木", 4: "金", 5: "土", 6: "日"
+        }
+
+        # 曜日別データの初期化
+        weekday_data = {day: {"Room1": [], "Room2": [], "Room3": []} for day in dashboard_data.labels["daysOfWeek"]}
+
+        # データの集計
+        for _, row in occupancy_df.iterrows():
+            # 日付、ルーム、稼働率を取得
+            date = row['date']
+            room = row['room']
+            occupancy_rate = float(row['occupancy_rate'])
+
+            # 月別データに追加
+            month_str = date.strftime('%Y-%m')
+            if month_str in monthly_data and room in ["Room1", "Room2", "Room3"]:
+                monthly_data[month_str][room].append(occupancy_rate)
+
+            # 曜日別データに追加
+            weekday = weekday_mapping.get(date.weekday())
+            if weekday in weekday_data and room in ["Room1", "Room2", "Room3"]:
+                weekday_data[weekday][room].append(occupancy_rate)
+
+        # 月別データの平均を計算
+        dashboard_data.utilization["byMonth"] = []
+        for month, rooms in monthly_data.items():
+            month_data = {"name": month}
+            for room, values in rooms.items():
+                if values:
+                    month_data[room] = round(sum(values) / len(values), 1)
+                else:
+                    month_data[room] = 0
+            dashboard_data.utilization["byMonth"].append(month_data)
+
+        # 曜日別データの平均を計算
+        dashboard_data.utilization["byDayOfWeek"] = []
+        for day, rooms in weekday_data.items():
+            day_data = {"name": day}
+            for room, values in rooms.items():
+                if values:
+                    day_data[room] = round(sum(values) / len(values), 1)
+                else:
+                    day_data[room] = 0
+            dashboard_data.utilization["byDayOfWeek"].append(day_data)
+
+        # 全体サマリーの計算
+        room_avg = {"Room1": 0, "Room2": 0, "Room3": 0}
+        room_count = {"Room1": 0, "Room2": 0, "Room3": 0}
+
+        for _, row in occupancy_df.iterrows():
+            room = row['room']
+            if room in room_avg:
+                room_avg[room] += float(row['occupancy_rate'])
+                room_count[room] += 1
+
+        # 平均を計算
+        for room in room_avg:
+            if room_count[room] > 0:
+                room_avg[room] = round(room_avg[room] / room_count[room], 1)
+
+        # 全体平均を計算
+        total_sum = sum(room_avg.values())
+        total_count = sum(1 for v in room_avg.values() if v > 0)
+        overall_avg = round(total_sum / total_count, 1) if total_count > 0 else 0
+
+        # サマリーを更新
+        dashboard_data.utilization["summary"] = {
+            "overall": overall_avg,
+            "byRoom": room_avg
+        }
+
+        print("ダッシュボードデータが正常に更新されました")
+    except Exception as e:
+        print(f"ダッシュボードデータ更新エラー: {str(e)}")
+        print(traceback.format_exc())
 
 # ヘルスチェック
 @app.get("/health")
