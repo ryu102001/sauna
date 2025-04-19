@@ -608,7 +608,7 @@ async def test_upload():
         headers={"Content-Type": "application/json"}
     )
 
-def process_uploaded_csv(file, data_type):
+async def process_uploaded_csv(file, data_type):
     """
     CSVファイルを処理してデータを変換し、保存します
     """
@@ -616,19 +616,28 @@ def process_uploaded_csv(file, data_type):
 
     try:
         # CSVファイルを読み込む
+        print(f"CSVファイル読み込み開始: file={file.filename}")
         df = pd.read_csv(file.file, encoding='utf-8')
+        print(f"CSVファイル読み込み成功: エンコーディング=utf-8")
 
         # カラム名を確認して出力
-        print("CSVファイルのカラム:", df.columns.tolist())
+        print("CSVカラム:", df.columns.tolist())
+        print("データサンプル:", df.head(3).to_dict('records'))
 
         # データタイプによって処理を分岐
         if data_type == "occupancy":
             # オリジナルのカラムを保存
             original_columns = df.columns.tolist()
+            print("元のCSVカラム:", original_columns)
+            print("入力ファイル情報:")
+            print(f"- カラム数: {len(df.columns)}")
+            print(f"- 行数: {len(df)}")
+            print(f"- データ型: {df.dtypes}")
 
             # レッスン予約形式を検出
             if any(col in original_columns for col in ["ルームコード", "ルーム名"]):
-                print("レッスン予約形式を検出しました")
+                print("レッスン予約フォーマットを検出しました")
+                print("レッスンデータフォーマットを処理します")
 
                 # 必要なカラムがあるか確認
                 date_col = None
@@ -638,6 +647,7 @@ def process_uploaded_csv(file, data_type):
                         break
 
                 if date_col is None:
+                    print("日付カラムが見つかりません")
                     return {
                         "status": "エラー",
                         "detail": "CSVファイルに日付を示すカラムが見つかりません"
@@ -651,6 +661,7 @@ def process_uploaded_csv(file, data_type):
                         break
 
                 if room_col is None:
+                    print("ルーム名カラムが見つかりません")
                     return {
                         "status": "エラー",
                         "detail": "CSVファイルにルーム名を示すカラムが見つかりません"
@@ -663,13 +674,14 @@ def process_uploaded_csv(file, data_type):
                         reservation_cols.append(col_name)
 
                 if not reservation_cols:
+                    print("予約情報カラムが見つかりません")
                     return {
                         "status": "エラー",
                         "detail": "CSVファイルに予約情報を示すカラムが見つかりません"
                     }
 
                 # 日付カラムを変換
-                print(f"検出したカラム - 日付: {date_col}, ルーム: {room_col}, 予約: {reservation_cols}")
+                print(f"検出したカラム - 日付: {date_col}, ルーム: {room_col}, 予約数: {reservation_cols}")
                 df[date_col] = pd.to_datetime(df[date_col])
                 df = df.rename(columns={date_col: "date"})
 
@@ -686,32 +698,41 @@ def process_uploaded_csv(file, data_type):
                         break
 
                 if occupancy_col:
+                    print(f"稼働率カラム検出: {occupancy_col}")
+                    print(f"稼働率データサンプル: {df[occupancy_col].head(10).tolist()}")
+
                     # 稼働率を数値に変換（例：'85%' → 85.0）
+                    # 複数の値が結合されている場合に備えて、最初の数値部分のみを抽出
                     df[occupancy_col] = df[occupancy_col].apply(
-                        lambda x: float(str(x).replace('%', '')) if pd.notnull(x) else None
+                        lambda x: float(re.match(r'(\d+)', str(x)).group(1)) if pd.notnull(x) and re.match(r'(\d+)', str(x)) else None
                     )
+                    print(f"変換後の稼働率データサンプル: {df[occupancy_col].head(10).tolist()}")
 
                     # ルームごとの平均稼働率を計算
                     room_summary["avg_occupancy"] = df.groupby(room_col)[occupancy_col].mean()
+                    print(f"ルームごとの平均稼働率: {room_summary['avg_occupancy'].to_dict()}")
 
                     # 稼働率データフレームを作成
                     occupancy_df = df[[room_col, "date", occupancy_col]].copy()
+                    print(f"稼働率データフレーム作成 - 行数: {len(occupancy_df)}, 欠損値: {occupancy_df.isna().sum().to_dict()}")
                     occupancy_df = occupancy_df.rename(columns={room_col: "room", occupancy_col: "occupancy"})
 
                     # タイムスタンプを含むファイル名で保存
                     timestamp = int(time.time())
                     output_file = f"uploads/occupancy_{timestamp}.csv"
                     occupancy_df.to_csv(output_file, index=False)
+                    print(f"稼働率データを保存しました: {output_file}")
 
                     # 詳細データを保存
                     details_file = f"uploads/occupancy_details_{timestamp}.csv"
                     df.to_csv(details_file, index=False)
+                    print(f"詳細データを保存しました: {details_file}")
 
                     # ルームごとの詳細情報を取得
                     room_details = {}
                     for room in occupancy_df["room"].unique():
                         room_data = occupancy_df[occupancy_df["room"] == room]
-                        room_occupancy = room_data["occupancy"].tolist()
+                        room_occupancy = room_data["occupancy"].dropna().tolist()
                         if room_occupancy:
                             avg_occ = sum(room_occupancy) / len(room_occupancy)
                             min_occ = min(room_occupancy)
@@ -721,13 +742,17 @@ def process_uploaded_csv(file, data_type):
                                 "min": min_occ,
                                 "max": max_occ
                             }
+                            print(f"ルーム {room} の稼働率情報: 平均={avg_occ:.1f}%, 最小={min_occ:.1f}%, 最大={max_occ:.1f}%")
 
                     # 日付範囲を取得
                     min_date = df["date"].min().strftime("%Y-%m-%d")
                     max_date = df["date"].max().strftime("%Y-%m-%d")
+                    print(f"データ期間: {min_date} から {max_date} まで")
 
                     # dashboard_dataを更新する
+                    print("ダッシュボードデータの更新を開始します")
                     update_dashboard_with_occupancy_data(occupancy_df)
+                    print("ダッシュボードデータの更新が完了しました")
 
                     return {
                         "status": "成功",
@@ -743,30 +768,40 @@ def process_uploaded_csv(file, data_type):
 
                 # 稼働率カラムがない場合はスペース数と予約数から計算
                 else:
+                    print("稼働率カラムがないため、スペース数と予約数から計算します")
                     if "総予約数" in original_columns and "スペース数" in original_columns:
-                        df["稼働率"] = (df["総予約数"] / df["スペース数"]) * 100
+                        # スペース数が0の場合に0除算を防ぐ
+                        df["稼働率"] = df.apply(
+                            lambda row: (row["総予約数"] / row["スペース数"]) * 100 if row["スペース数"] > 0 else 0,
+                            axis=1
+                        )
+                        print(f"計算された稼働率データサンプル: {df['稼働率'].head(10).tolist()}")
 
                         # ルームごとの平均稼働率を計算
                         room_summary["avg_occupancy"] = df.groupby(room_col)["稼働率"].mean()
+                        print(f"ルームごとの平均稼働率: {room_summary['avg_occupancy'].to_dict()}")
 
                         # 稼働率データフレームを作成
                         occupancy_df = df[[room_col, "date", "稼働率"]].copy()
+                        print(f"稼働率データフレーム作成 - 行数: {len(occupancy_df)}, 欠損値: {occupancy_df.isna().sum().to_dict()}")
                         occupancy_df = occupancy_df.rename(columns={room_col: "room", "稼働率": "occupancy"})
 
                         # タイムスタンプを含むファイル名で保存
                         timestamp = int(time.time())
                         output_file = f"uploads/occupancy_{timestamp}.csv"
                         occupancy_df.to_csv(output_file, index=False)
+                        print(f"稼働率データを保存しました: {output_file}")
 
                         # 詳細データを保存
                         details_file = f"uploads/occupancy_details_{timestamp}.csv"
                         df.to_csv(details_file, index=False)
+                        print(f"詳細データを保存しました: {details_file}")
 
                         # ルームごとの詳細情報を取得
                         room_details = {}
                         for room in occupancy_df["room"].unique():
                             room_data = occupancy_df[occupancy_df["room"] == room]
-                            room_occupancy = room_data["occupancy"].tolist()
+                            room_occupancy = room_data["occupancy"].dropna().tolist()
                             if room_occupancy:
                                 avg_occ = sum(room_occupancy) / len(room_occupancy)
                                 min_occ = min(room_occupancy)
@@ -776,13 +811,17 @@ def process_uploaded_csv(file, data_type):
                                     "min": min_occ,
                                     "max": max_occ
                                 }
+                                print(f"ルーム {room} の稼働率情報: 平均={avg_occ:.1f}%, 最小={min_occ:.1f}%, 最大={max_occ:.1f}%")
 
                         # 日付範囲を取得
                         min_date = df["date"].min().strftime("%Y-%m-%d")
                         max_date = df["date"].max().strftime("%Y-%m-%d")
+                        print(f"データ期間: {min_date} から {max_date} まで")
 
                         # dashboard_dataを更新する
+                        print("ダッシュボードデータの更新を開始します")
                         update_dashboard_with_occupancy_data(occupancy_df)
+                        print("ダッシュボードデータの更新が完了しました")
 
                         return {
                             "status": "成功",
@@ -802,22 +841,26 @@ def process_uploaded_csv(file, data_type):
 
                 # 日付カラムを変換
                 df["date"] = pd.to_datetime(df["date"])
+                print("日付カラムを変換しました")
 
                 # 稼働率を数値に変換（例：'85%' → 85.0）
+                print(f"稼働率データサンプル: {df['occupancy'].head(10).tolist()}")
                 df["occupancy"] = df["occupancy"].apply(
-                    lambda x: float(str(x).replace('%', '')) if pd.notnull(x) else None
+                    lambda x: float(re.match(r'(\d+)', str(x)).group(1)) if pd.notnull(x) and re.match(r'(\d+)', str(x)) else None
                 )
+                print(f"変換後の稼働率データサンプル: {df['occupancy'].head(10).tolist()}")
 
                 # タイムスタンプを含むファイル名で保存
                 timestamp = int(time.time())
                 output_file = f"uploads/occupancy_{timestamp}.csv"
                 df.to_csv(output_file, index=False)
+                print(f"稼働率データを保存しました: {output_file}")
 
                 # ルームごとの詳細情報を取得
                 room_details = {}
                 for room in df["room"].unique():
                     room_data = df[df["room"] == room]
-                    room_occupancy = room_data["occupancy"].tolist()
+                    room_occupancy = room_data["occupancy"].dropna().tolist()
                     if room_occupancy:
                         avg_occ = sum(room_occupancy) / len(room_occupancy)
                         min_occ = min(room_occupancy)
@@ -827,13 +870,17 @@ def process_uploaded_csv(file, data_type):
                             "min": min_occ,
                             "max": max_occ
                         }
+                        print(f"ルーム {room} の稼働率情報: 平均={avg_occ:.1f}%, 最小={min_occ:.1f}%, 最大={max_occ:.1f}%")
 
                 # 日付範囲を取得
                 min_date = df["date"].min().strftime("%Y-%m-%d")
                 max_date = df["date"].max().strftime("%Y-%m-%d")
+                print(f"データ期間: {min_date} から {max_date} まで")
 
                 # dashboard_dataを更新する
+                print("ダッシュボードデータの更新を開始します")
                 update_dashboard_with_occupancy_data(df)
+                print("ダッシュボードデータの更新が完了しました")
 
                 return {
                     "status": "成功",
@@ -848,6 +895,7 @@ def process_uploaded_csv(file, data_type):
 
             # フォーマットが認識できない場合
             else:
+                print("認識できないCSVフォーマットです")
                 return {
                     "status": "エラー",
                     "detail": "CSVフォーマットが認識できません。正しいフォーマットで再アップロードしてください。"
@@ -881,69 +929,124 @@ def update_dashboard_with_occupancy_data(occupancy_df):
             print("稼働率データが空のため、ダッシュボードの更新をスキップします")
             return
 
+        print(f"ダッシュボード更新開始: データ行数={len(occupancy_df)}")
+        print(f"入力データサンプル: {occupancy_df.head(3).to_dict('records')}")
+
         # dashboard_data.utilizationが初期化されていない場合は初期化
         if not hasattr(dashboard_data, 'utilization') or dashboard_data.utilization is None:
             dashboard_data.utilization = {}
+            print("utilization辞書を初期化しました")
 
         # 必要なフィールドの初期化
         if 'monthly' not in dashboard_data.utilization:
             dashboard_data.utilization['monthly'] = {}
+            print("monthly辞書を初期化しました")
 
         if 'weekly' not in dashboard_data.utilization:
             dashboard_data.utilization['weekly'] = {}
+            print("weekly辞書を初期化しました")
 
         if 'rooms' not in dashboard_data.utilization:
             dashboard_data.utilization['rooms'] = {}
+            print("rooms辞書を初期化しました")
 
         # 日付をdatetime形式に変換
-        if isinstance(occupancy_df['date'].iloc[0], str):
-            occupancy_df['date'] = pd.to_datetime(occupancy_df['date'])
+        if len(occupancy_df) > 0:
+            first_date = occupancy_df['date'].iloc[0]
+            print(f"最初の日付値: {first_date}, タイプ: {type(first_date)}")
+
+            if isinstance(first_date, str):
+                occupancy_df['date'] = pd.to_datetime(occupancy_df['date'])
+                print("日付列を日時形式に変換しました")
+
+        # NaN値を確認
+        nan_count = occupancy_df['occupancy'].isna().sum()
+        print(f"稼働率のNaN値の数: {nan_count}")
+
+        # NaN値を除外
+        occupancy_df = occupancy_df.dropna(subset=['occupancy'])
+        print(f"NaN値を除外後のデータ行数: {len(occupancy_df)}")
 
         # 月別の稼働率を計算
-        occupancy_df['year_month'] = occupancy_df['date'].dt.strftime('%Y-%m')
-        monthly_occupancy = occupancy_df.groupby(['year_month', 'room'])['occupancy'].mean().reset_index()
+        try:
+            occupancy_df['year_month'] = occupancy_df['date'].dt.strftime('%Y-%m')
+            monthly_occupancy = occupancy_df.groupby(['year_month', 'room'])['occupancy'].mean().reset_index()
+            print(f"月別稼働率計算結果: {len(monthly_occupancy)}行")
+            print(f"月別稼働率サンプル: {monthly_occupancy.head(3).to_dict('records')}")
 
-        for _, row in monthly_occupancy.iterrows():
-            year_month = row['year_month']
-            room = row['room']
-            occupancy = row['occupancy']
+            for _, row in monthly_occupancy.iterrows():
+                year_month = row['year_month']
+                room = row['room']
+                occupancy = row['occupancy']
 
-            if year_month not in dashboard_data.utilization['monthly']:
-                dashboard_data.utilization['monthly'][year_month] = {}
+                if year_month not in dashboard_data.utilization['monthly']:
+                    dashboard_data.utilization['monthly'][year_month] = {}
 
-            dashboard_data.utilization['monthly'][year_month][room] = occupancy
+                dashboard_data.utilization['monthly'][year_month][room] = occupancy
+
+            print(f"月別稼働率更新完了: {len(dashboard_data.utilization['monthly'])}月分")
+        except Exception as e:
+            print(f"月別稼働率計算中にエラー: {str(e)}")
+            traceback.print_exc()
 
         # 曜日別の稼働率を計算
-        occupancy_df['day_of_week'] = occupancy_df['date'].dt.dayofweek  # 0=月曜, 6=日曜
-        weekly_occupancy = occupancy_df.groupby(['day_of_week', 'room'])['occupancy'].mean().reset_index()
+        try:
+            occupancy_df['day_of_week'] = occupancy_df['date'].dt.dayofweek  # 0=月曜, 6=日曜
+            weekly_occupancy = occupancy_df.groupby(['day_of_week', 'room'])['occupancy'].mean().reset_index()
+            print(f"曜日別稼働率計算結果: {len(weekly_occupancy)}行")
 
-        day_names = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+            day_names = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
 
-        for _, row in weekly_occupancy.iterrows():
-            day_idx = int(row['day_of_week'])
-            day_name = day_names[day_idx]
-            room = row['room']
-            occupancy = row['occupancy']
+            for _, row in weekly_occupancy.iterrows():
+                day_idx = int(row['day_of_week'])
+                day_name = day_names[day_idx]
+                room = row['room']
+                occupancy = row['occupancy']
 
-            if day_name not in dashboard_data.utilization['weekly']:
-                dashboard_data.utilization['weekly'][day_name] = {}
+                if day_name not in dashboard_data.utilization['weekly']:
+                    dashboard_data.utilization['weekly'][day_name] = {}
 
-            dashboard_data.utilization['weekly'][day_name][room] = occupancy
+                dashboard_data.utilization['weekly'][day_name][room] = occupancy
+
+            print(f"曜日別稼働率更新完了: {len(dashboard_data.utilization['weekly'])}曜日分")
+        except Exception as e:
+            print(f"曜日別稼働率計算中にエラー: {str(e)}")
+            traceback.print_exc()
 
         # ルームごとの平均稼働率を計算
-        room_occupancy = occupancy_df.groupby('room')['occupancy'].mean()
+        try:
+            room_occupancy = occupancy_df.groupby('room')['occupancy'].mean()
+            print(f"ルームごとの稼働率: {room_occupancy.to_dict()}")
 
-        for room, occupancy in room_occupancy.items():
-            dashboard_data.utilization['rooms'][room] = {
-                'average': occupancy,
-                'label': room
-            }
+            for room, occupancy in room_occupancy.items():
+                dashboard_data.utilization['rooms'][room] = {
+                    'average': occupancy,
+                    'label': room
+                }
+
+            print(f"ルーム別稼働率更新完了: {len(dashboard_data.utilization['rooms'])}ルーム")
+        except Exception as e:
+            print(f"ルーム別稼働率計算中にエラー: {str(e)}")
+            traceback.print_exc()
 
         # 全体平均の稼働率も計算
-        overall_avg = occupancy_df['occupancy'].mean()
-        dashboard_data.utilization['overall_average'] = overall_avg
+        try:
+            overall_avg = occupancy_df['occupancy'].mean()
+            dashboard_data.utilization['overall_average'] = overall_avg
+            print(f"全体平均稼働率: {overall_avg:.2f}%")
+        except Exception as e:
+            print(f"全体平均計算中にエラー: {str(e)}")
+            traceback.print_exc()
 
-        print(f"ダッシュボードデータを更新しました - ルーム数: {len(room_occupancy)}, 全体平均: {overall_avg:.2f}%")
+        # ダッシュボードデータの一部を表示して確認
+        try:
+            print("更新されたダッシュボードデータのサンプル:")
+            print(f"- ルーム数: {len(dashboard_data.utilization['rooms'])}")
+            print(f"- 月数: {len(dashboard_data.utilization['monthly'])}")
+            print(f"- 曜日数: {len(dashboard_data.utilization['weekly'])}")
+            print(f"- 全体平均: {dashboard_data.utilization.get('overall_average', 'N/A')}")
+        except Exception as e:
+            print(f"ダッシュボードデータ表示中にエラー: {str(e)}")
 
     except Exception as e:
         print(f"ダッシュボードデータの更新中にエラーが発生しました: {str(e)}")
