@@ -7,7 +7,7 @@ import sys
 import json
 import pandas as pd  # データの前処理用にpandasをインポート
 
-def upload_csv(file_path, data_type="occupancy", port=8001):
+def upload_csv(file_path, data_type="occupancy", port=8000):
     """
     CSVファイルをAPIサーバーにアップロードする
 
@@ -26,6 +26,9 @@ def upload_csv(file_path, data_type="occupancy", port=8001):
 
     # APIエンドポイントURL
     url = f"http://localhost:{port}/api/upload-csv"
+
+    # 使用するポート番号を表示
+    print(f"使用ポート: {port}")
 
     # CSVファイルの分析（レッスンデータかどうかを確認）
     try:
@@ -68,36 +71,37 @@ def upload_csv(file_path, data_type="occupancy", port=8001):
 
     print(f"アップロード中: {file_path} (タイプ: {data_type})")
 
+    # POSTリクエストを送信
     try:
-        # POSTリクエストを送信
         response = requests.post(url, files=files, data=data)
-
-        # レスポンスのステータスコードを確認
         if response.status_code == 200:
-            print("アップロード成功!")
-            return response.json()
+            print("アップロード成功！")
+            try:
+                result = response.json()
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+                return result
+            except json.JSONDecodeError:
+                print(f"警告: レスポンスのJSONパースに失敗しました。レスポンス本文: {response.text}")
+                return {"error": "レスポンスのJSONパースに失敗しました"}
         else:
-            print(f"アップロード失敗: ステータスコード {response.status_code}")
-            print(f"レスポンス: {response.text}")
-            return response.json() if response.headers.get('content-type') == 'application/json' else response.text
-    except Exception as e:
+            print(f"エラー: ステータスコード {response.status_code}")
+            try:
+                error_detail = response.json()
+                print(json.dumps(error_detail, indent=2, ensure_ascii=False))
+            except:
+                print(f"レスポンス本文: {response.text}")
+            return {"error": f"エラーレスポンス: {response.status_code}"}
+    except requests.exceptions.RequestException as e:
         print(f"エラー: {str(e)}")
-        return None
-    finally:
-        # ファイルを閉じる
-        files["file"].close()
+        return {"error": str(e)}
 
 if __name__ == "__main__":
-    # コマンドライン引数からファイルパスとデータタイプを取得
     if len(sys.argv) < 2:
-        print("使用方法: python upload_helper.py [ファイルパス] [データタイプ(省略可)]")
+        print("使用方法: python3 upload_helper.py [ファイルパス] [データタイプ(optional)] [ポート番号(optional)]")
         sys.exit(1)
 
     file_path = sys.argv[1]
     data_type = sys.argv[2] if len(sys.argv) > 2 else "occupancy"
+    port = int(sys.argv[3]) if len(sys.argv) > 3 else 8000  # デフォルトポートを8000に変更
 
-    # アップロード実行
-    result = upload_csv(file_path, data_type)
-    if result:
-        print("\n結果:")
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+    upload_csv(file_path, data_type, port)
