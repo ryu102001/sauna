@@ -32,14 +32,13 @@ const PIE_COLORS = [
   COLORS.warning
 ];
 
-// APIのベースURL - 環境変数から取得するように修正
-const API_BASE_URL = process.env.REACT_APP_API_URL || '';
+// APIのベースURLを環境変数から取得または、デフォルト値を使用
+const BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://localhost:8000";
 
-// APIエンドポイントのパス設定
 const API_PATHS = {
-  dashboard: window.location.origin.includes("localhost") ? "http://localhost:8000/api/dashboard" : "/api/dashboard",
-  uploadCsv: window.location.origin.includes("localhost") ? "http://localhost:8000/api/upload-csv" : "/api/upload-csv",
-  resetDashboard: window.location.origin.includes("localhost") ? "http://localhost:8000/api/reset-dashboard" : "/api/reset-dashboard",
+  dashboard: `${BASE_URL}/api/dashboard`,
+  uploadCSV: `${BASE_URL}/api/upload-csv`,
+  resetDashboard: `${BASE_URL}/api/reset-dashboard`,
 };
 
 // デバッグログを追加
@@ -157,7 +156,7 @@ const CSVUploader = ({ onUploadSuccess }) => {
         console.log(`アップロード開始: ${file.name}, タイプ: ${dataType}`);
 
         // APIサーバーにファイルをアップロード
-        const response = await fetch(API_PATHS.uploadCsv, {
+        const response = await fetch(API_PATHS.uploadCSV, {
           method: 'POST',
           body: formData,
         });

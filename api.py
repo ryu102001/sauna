@@ -608,822 +608,346 @@ async def test_upload():
         headers={"Content-Type": "application/json"}
     )
 
-async def process_uploaded_csv(file: UploadFile, data_type: str):
-    """アップロードされたCSVファイルを処理する"""
-    try:
-        contents = await file.read()
-        filename = file.filename
-
-        # 一時ファイルパスを作成
-        timestamp = int(time.time())
-        temp_file_path = f"uploads/temp_{timestamp}_{filename}"
-
-        # uploads ディレクトリが存在しない場合は作成
-        if not os.path.exists("uploads"):
-            os.makedirs("uploads")
-
-        # ファイルを一時保存
-        with open(temp_file_path, "wb") as f:
-            f.write(contents)
-
-        # CSVファイルの読み込みを複数のエンコーディングで試行
-        encoding_list = ['utf-8', 'cp932', 'shift_jis', 'euc-jp', 'iso-2022-jp']
-        df = None
-        error_messages = []
-
-        for encoding in encoding_list:
-            try:
-                # エンコーディングとセパレータを明示的に指定
-                df = pd.read_csv(temp_file_path, encoding=encoding)
-                print(f"CSVファイル読み込み成功: エンコーディング={encoding}")
-                break
-            except Exception as e:
-                error_messages.append(f"エンコーディング {encoding} での読み込み失敗: {str(e)}")
-                try:
-                    # 区切り文字をカンマ以外（タブ、セミコロン）でも試行
-                    df = pd.read_csv(temp_file_path, encoding=encoding, sep='\t')
-                    print(f"CSVファイル読み込み成功: エンコーディング={encoding}, 区切り文字=タブ")
-                    break
-                except Exception as e2:
-                    error_messages.append(f"タブ区切りでも失敗: {str(e2)}")
-                    try:
-                        df = pd.read_csv(temp_file_path, encoding=encoding, sep=';')
-                        print(f"CSVファイル読み込み成功: エンコーディング={encoding}, 区切り文字=セミコロン")
-                        break
-                    except Exception as e3:
-                        error_messages.append(f"セミコロン区切りでも失敗: {str(e3)}")
-
-        # 読み込み失敗の場合
-        if df is None:
-            # ファイルの中身を直接確認
-            with open(temp_file_path, 'rb') as f:
-                first_line = f.readline().decode('utf-8', errors='replace')
-
-            error_msg = f"CSVファイルの読み込みに失敗しました。ファイル形式を確認してください。\nファイル先頭の内容: {first_line}\n詳細エラー: {error_messages[-1]}"
-            print(f"エラー: {error_msg}")
-            return JSONResponse(
-                status_code=400,
-                content={"status": "エラー", "detail": error_msg},
-                headers={
-                    "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "POST, PUT, OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
-                }
-            )
-
-        # 読み込みに成功したが、カラムが0または非常に少ない場合
-        if len(df.columns) == 0 or (len(df.columns) == 1 and len(df) == 0):
-            # CSVファイルの内容をプレビュー
-            with open(temp_file_path, 'rb') as f:
-                preview = f.read(1024).decode('utf-8', errors='replace')
-
-            error_msg = f"CSVファイルにカラムが見つかりません。ファイル形式を確認してください。\nファイル内容プレビュー: {preview}"
-            print(f"エラー: {error_msg}")
-            return JSONResponse(
-                status_code=400,
-                content={"status": "エラー", "detail": error_msg},
-                headers={
-                    "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "POST, PUT, OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
-                }
-            )
-
-        print(f"CSVカラム: {df.columns.tolist()}")
-        print(f"データサンプル: {df.head(3).to_dict('records')}")
-
-        # データタイプに基づく処理
-        if data_type == "occupancy":
-            # 元のカラム名を保存
-            original_columns = df.columns.tolist()
-            print(f"元のCSVカラム: {original_columns}")
-
-            # 入力ファイルの詳細を出力（デバッグ用）
-            print(f"入力ファイル情報:")
-            print(f"- カラム数: {len(df.columns)}")
-            print(f"- 行数: {len(df)}")
-            print(f"- データ型: {df.dtypes}")
-
-            # カラム名の前処理: 空白文字の削除とトリム
-            df.columns = [col.strip() if isinstance(col, str) else col for col in df.columns]
-
-            # 予約データの詳細なフォーマットを検出
-            is_lesson_format = any("レッスン日" in col for col in original_columns) and any("ルーム" in col for col in original_columns)
-            is_simple_format = any(col.lower() in ["status", "room", "部屋", "ルーム", "date", "日付"] for col in df.columns)
-            is_frame_format = any("frame" in filename.lower() or "frame" in col.lower() for col in df.columns)
-
-            # CSVの種類を検出
-            detected_format = None
-            if is_lesson_format:
-                detected_format = "lesson"
-                print("レッスン予約フォーマットを検出しました")
-            elif is_simple_format:
-                detected_format = "simple"
-                print("シンプルなフォーマットを検出しました")
-            elif is_frame_format:
-                detected_format = "frame"
-                print("フレームデータ形式を検出しました")
-            else:
-                # カラム名からフォーマットを推測
-                if len(df.columns) == 1:
-                    # 1列のみの場合、カンマやタブで分割されていない可能性
-                    first_row = df.iloc[0, 0] if len(df) > 0 else ""
-                    if isinstance(first_row, str) and (',' in first_row or '\t' in first_row):
-                        # カンマやタブ区切りの文字列を含む可能性がある
-                        error_msg = f"CSVファイルの区切り文字が正しく認識されていません。最初の行の内容: {first_row}"
-                        print(f"エラー: {error_msg}")
-                        return JSONResponse(
-                            status_code=400,
-                            content={"status": "エラー", "detail": error_msg},
-                            headers={
-                                "Content-Type": "application/json",
-                                "Access-Control-Allow-Origin": "*"
-                            }
-                        )
-
-                # 既知のフォーマットに一致しない場合
-                error_msg = "サポートされていないCSVフォーマットです。稼働率データに必要なカラム(date, room, occupancy_rate)またはそれに相当するカラムが必要です。"
-                print(f"エラー: {error_msg}")
-                print(f"利用可能なカラム: {df.columns.tolist()}")
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "status": "エラー",
-                        "detail": error_msg,
-                        "available_columns": df.columns.tolist(),
-                        "expected_columns": "date/日付, room/部屋, occupancy_rate/稼働率 またはそれに相当するカラム"
-                    },
-                    headers={
-                        "Content-Type": "application/json",
-                        "Access-Control-Allow-Origin": "*"
-                    }
-                )
-
-            # ここからフォーマット別の処理
-            processed_df = None
-
-            # フォーマット別の処理を実行
-            if detected_format == "lesson":
-                # レッスンデータの処理
-                print("レッスンデータフォーマットを処理します")
-
-                # 必要なカラムを確認
-                date_column = None
-                room_column = None
-                reservation_column = None
-                capacity_column = None
-                no_show_column = None
-                occupancy_column = None
-
-                # レッスン日カラムの検出
-                date_candidates = ["レッスン日", "日付", "date"]
-                for candidate in date_candidates:
-                    matching_cols = [col for col in df.columns if candidate in col]
-                    if matching_cols:
-                        date_column = matching_cols[0]
-                        break
-
-                # ルーム名カラムの検出
-                room_candidates = ["ルーム名", "ルームコード", "room", "部屋"]
-                for candidate in room_candidates:
-                    matching_cols = [col for col in df.columns if candidate in col]
-                    if matching_cols:
-                        room_column = matching_cols[0]
-                        break
-
-                # 予約数カラムの検出
-                reservation_candidates = ["総予約数", "予約数", "予約"]
-                for candidate in reservation_candidates:
-                    matching_cols = [col for col in df.columns if candidate in col]
-                    if matching_cols:
-                        reservation_column = matching_cols[0]
-                        break
-
-                # 無断キャンセル数カラムの検出
-                no_show_candidates = ["無断キャンセル数", "無断キャンセル"]
-                for candidate in no_show_candidates:
-                    matching_cols = [col for col in df.columns if candidate in col]
-                    if matching_cols:
-                        no_show_column = matching_cols[0]
-                        break
-
-                # スペース数（キャパシティ）カラムの検出
-                capacity_candidates = ["スペース数", "定員", "キャパシティ"]
-                for candidate in capacity_candidates:
-                    matching_cols = [col for col in df.columns if candidate in col]
-                    if matching_cols:
-                        capacity_column = matching_cols[0]
-                        break
-
-                # 稼働率カラムの検出
-                occupancy_candidates = ["稼働率", "occupancy_rate"]
-                for candidate in occupancy_candidates:
-                    matching_cols = [col for col in df.columns if candidate in col]
-                    if matching_cols:
-                        occupancy_column = matching_cols[0]
-                        break
-
-                # カラムの検出状況を出力
-                print(f"検出されたカラム - 日付: {date_column}, ルーム: {room_column}, 予約数: {reservation_column}")
-
-                # 必須カラムの確認
-                if date_column is None:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"status": "エラー", "detail": "CSVファイルに日付を示すカラムが見つかりません"},
-                        headers={"Content-Type": "application/json"}
-                    )
-
-                if room_column is None:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"status": "エラー", "detail": "CSVファイルにルーム名を示すカラムが見つかりません"},
-                        headers={"Content-Type": "application/json"}
-                    )
-
-                # 日付型への変換
-                try:
-                    df['date'] = pd.to_datetime(df[date_column], errors='coerce')
-                    if df['date'].isna().all():
-                        # 別の形式を試す
-                        print("標準フォーマットでの日付変換に失敗しました。他の形式を試します。")
-                        df['date'] = pd.to_datetime(df[date_column], format='%Y/%m/%d', errors='coerce')
-                    if df['date'].isna().all():
-                        # さらに別の形式を試す
-                        print("2番目のフォーマットでの日付変換も失敗しました。他の形式を試します。")
-                        df['date'] = pd.to_datetime(df[date_column], format='%Y年%m月%d日', errors='coerce')
-                except Exception as e:
-                    print(f"日付変換エラー: {e}")
-                    return JSONResponse(
-                        status_code=400,
-                        content={"status": "エラー", "detail": f"日付の変換に失敗しました: {str(e)}"},
-                        headers={"Content-Type": "application/json"}
-                    )
-
-                # データフレームを整形
-                if room_column:
-                    df['room'] = df[room_column]
-
-                # 稼働率を計算または変換
-                if not occupancy_column and reservation_column and capacity_column:
-                    print(f"稼働率を計算します: {reservation_column} / {capacity_column}")
-                    df['occupancy_rate'] = (df[reservation_column] / df[capacity_column]) * 100
-                elif occupancy_column:
-                    # 稼働率カラムがあるが、文字列（パーセント表記）の場合は数値に変換
-                    def convert_occupancy(val):
-                        if pd.isna(val):
-                            return 0
-                        if isinstance(val, (int, float)):
-                            return float(val)
-                        # 文字列の処理
-                        if isinstance(val, str):
-                            # %記号を削除して数値化
-                            val = val.replace('%', '')
-                            try:
-                                return float(val)
-                            except ValueError:
-                                return 0
-                        return 0
-
-                    print(f"既存の稼働率カラムを変換します: {occupancy_column}")
-                    df['occupancy_rate'] = df[occupancy_column].apply(convert_occupancy)
-                else:
-                    # どちらも利用できない場合はダミーデータを設定
-                    df['occupancy_rate'] = 0
-
-                # 整形されたデータを保存
-                processed_df = df[['date', 'room', 'occupancy_rate']].copy()
-
-                # 詳細データ（元のフォーマットに近い形で保存）
-                details_df = df.copy()
-
-                # 処理結果の保存
-                target_file_path = f"uploads/occupancy_{timestamp}.csv"
-                details_file_path = f"uploads/occupancy_details_{timestamp}.csv"
-
-                # 日付をYYYY-MM-DD形式に変換
-                processed_df['date'] = processed_df['date'].dt.strftime('%Y-%m-%d')
-                processed_df.to_csv(target_file_path, index=False)
-
-                # 詳細ファイルに元の日付形式を保存
-                if 'date' in details_df.columns:
-                    details_df['date'] = details_df['date'].dt.strftime('%Y-%m-%d')
-                details_df.to_csv(details_file_path, index=False)
-
-                # ルーム別の稼働率サマリーを計算
-                room_summary = {}
-                for room in processed_df['room'].unique():
-                    if pd.isna(room):
-                        continue
-                    room_data = processed_df[processed_df['room'] == room]
-                    if len(room_data) > 0:
-                        try:
-                            avg_rate = room_data['occupancy_rate'].astype(float).mean()
-                            min_rate = room_data['occupancy_rate'].astype(float).min()
-                            max_rate = room_data['occupancy_rate'].astype(float).max()
-                            room_summary[str(room)] = {
-                                "average": round(float(avg_rate), 2),
-                                "min": round(float(min_rate), 2),
-                                "max": round(float(max_rate), 2),
-                                "lessons": len(room_data)
-                            }
-                        except Exception as e:
-                            print(f"稼働率統計計算エラー（{room}）: {str(e)}")
-                            # エラー時にはデフォルト値を設定
-                            room_summary[str(room)] = {
-                                "average": 0,
-                                "min": 0,
-                                "max": 0,
-                                "lessons": len(room_data),
-                                "error": str(e)
-                            }
-
-                # 日付の範囲を取得
-                if len(processed_df) > 0:
-                    min_date = processed_df['date'].min()
-                    max_date = processed_df['date'].max()
-                else:
-                    min_date = "不明"
-                    max_date = "不明"
-
-                # processed_dfをグローバルのdashboard_dataに反映
-                update_dashboard_with_occupancy_data(processed_df)
-
-                return JSONResponse(
-                    content={
-                        "status": "成功",
-                        "file_saved": target_file_path,
-                        "details_saved": details_file_path,
-                        "total_lessons": len(processed_df),
-                        "date_range": {
-                            "from": min_date,
-                            "to": max_date
-                        },
-                        "room_summary": room_summary
-                    },
-                    headers={"Content-Type": "application/json"}
-                )
-            elif detected_format == "simple":
-                # シンプルデータの処理
-                print("シンプルフォーマットを処理します")
-
-                # 必要なカラムを確認
-                date_column = None
-                room_column = None
-                status_column = None
-
-                # 日付カラムの検出
-                date_candidates = ["日付", "date", "予約日", "Date"]
-                for candidate in date_candidates:
-                    matching_cols = [col for col in df.columns if candidate in col]
-                    if matching_cols:
-                        date_column = matching_cols[0]
-                        break
-
-                # ルームカラムの検出
-                room_candidates = ["部屋", "ルーム", "room", "Room"]
-                for candidate in room_candidates:
-                    matching_cols = [col for col in df.columns if candidate in col]
-                    if matching_cols:
-                        room_column = matching_cols[0]
-                        break
-
-                # ステータスカラムの検出
-                status_candidates = ["状態", "status", "Status", "予約状態"]
-                for candidate in status_candidates:
-                    matching_cols = [col for col in df.columns if candidate in col]
-                    if matching_cols:
-                        status_column = matching_cols[0]
-                        break
-
-                # 必須カラムの確認
-                if date_column is None:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"status": "エラー", "detail": "CSVファイルに日付を示すカラムが見つかりません"},
-                        headers={"Content-Type": "application/json"}
-                    )
-
-                if room_column is None:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"status": "エラー", "detail": "CSVファイルにルーム名を示すカラムが見つかりません"},
-                        headers={"Content-Type": "application/json"}
-                    )
-
-                # 日付型への変換
-                try:
-                    df['date'] = pd.to_datetime(df[date_column], errors='coerce')
-                except Exception as e:
-                    print(f"日付変換エラー: {e}")
-                    return JSONResponse(
-                        status_code=400,
-                        content={"status": "エラー", "detail": f"日付の変換に失敗しました: {str(e)}"},
-                        headers={"Content-Type": "application/json"}
-                    )
-
-                # ルーム名の標準化
-                df['room'] = df[room_column]
-
-                # 稼働率の計算（予約状態から）
-                if status_column:
-                    # ステータスが「予約済み」「利用済み」の場合は1、それ以外は0
-                    status_mapping = {
-                        '予約': 1, '予約済み': 1, '予約済': 1,
-                        '利用': 1, '利用済み': 1, '利用済': 1,
-                        '利用予定': 1, '確定': 1,
-                        '空き': 0, '未予約': 0, '空室': 0,
-                        'キャンセル': 0, 'キャンセル済み': 0, 'キャンセル済': 0
-                    }
-
-                    # 日本語のstatusをマッピング
-                    def map_status(status):
-                        if pd.isna(status):
-                            return 0
-                        for key, value in status_mapping.items():
-                            if key in str(status):
-                                return value
-                        return 0  # デフォルトは0（未予約扱い）
-
-                    df['reservation_status'] = df[status_column].apply(map_status)
-
-                    # 日付とルームでグループ化して稼働率を計算
-                    occupancy_df = df.groupby(['date', 'room'])['reservation_status'].agg(
-                        lambda x: sum(x) / len(x) * 100
-                    ).reset_index()
-                    occupancy_df.rename(columns={'reservation_status': 'occupancy_rate'}, inplace=True)
-
-                    # 結果を整形
-                    processed_df = occupancy_df[['date', 'room', 'occupancy_rate']].copy()
-                else:
-                    # ステータスカラムがない場合は稼働率0とする
-                    df['occupancy_rate'] = 0
-                    processed_df = df[['date', 'room']].copy()
-                    processed_df['occupancy_rate'] = 0
-
-                # 処理結果の保存
-                target_file_path = f"uploads/occupancy_{timestamp}.csv"
-                details_file_path = f"uploads/occupancy_details_{timestamp}.csv"
-
-                # 日付をYYYY-MM-DD形式に変換
-                processed_df['date'] = processed_df['date'].dt.strftime('%Y-%m-%d')
-                processed_df.to_csv(target_file_path, index=False)
-
-                # 詳細データを保存
-                df.to_csv(details_file_path, index=False)
-
-                # ルーム別の稼働率サマリーを計算
-                room_summary = {}
-                for room in processed_df['room'].unique():
-                    room_data = processed_df[processed_df['room'] == room]
-                    if len(room_data) > 0:
-                        avg_rate = room_data['occupancy_rate'].mean()
-                        min_rate = room_data['occupancy_rate'].min()
-                        max_rate = room_data['occupancy_rate'].max()
-                        room_summary[str(room)] = {
-                            "average": round(avg_rate, 2),
-                            "min": round(min_rate, 2),
-                            "max": round(max_rate, 2),
-                            "days": len(room_data)
-                        }
-
-                # 日付の範囲を取得
-                if len(processed_df) > 0:
-                    min_date = processed_df['date'].min()
-                    max_date = processed_df['date'].max()
-                else:
-                    min_date = "不明"
-                    max_date = "不明"
-
-                # processed_dfをグローバルのdashboard_dataに反映
-                update_dashboard_with_occupancy_data(processed_df)
-
-                return JSONResponse(
-                    content={
-                        "status": "成功",
-                        "file_saved": target_file_path,
-                        "details_saved": details_file_path,
-                        "total_days": len(processed_df),
-                        "date_range": {
-                            "from": min_date,
-                            "to": max_date
-                        },
-                        "room_summary": room_summary
-                    },
-                    headers={"Content-Type": "application/json"}
-                )
-            elif detected_format == "frame":
-                # フレームデータの処理
-                print("フレームデータ形式を処理します")
-
-                # 必要なカラムを確認
-                date_column = None
-                room_column = None
-                status_column = None
-
-                # 日付カラムの検出
-                date_candidates = ["日付", "date", "Date"]
-                for candidate in date_candidates:
-                    matching_cols = [col for col in df.columns if candidate in col]
-                    if matching_cols:
-                        date_column = matching_cols[0]
-                        break
-
-                # ルームカラムの検出
-                room_candidates = ["部屋", "ルーム", "room", "Room"]
-                for candidate in room_candidates:
-                    matching_cols = [col for col in df.columns if candidate in col]
-                    if matching_cols:
-                        room_column = matching_cols[0]
-                        break
-
-                # ステータスカラムの検出
-                status_candidates = ["状態", "status", "Status", "予約状態"]
-                for candidate in status_candidates:
-                    matching_cols = [col for col in df.columns if candidate in col]
-                    if matching_cols:
-                        status_column = matching_cols[0]
-                        break
-
-                # 必須カラムの確認
-                if date_column is None:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"status": "エラー", "detail": "CSVファイルに日付を示すカラムが見つかりません"},
-                        headers={"Content-Type": "application/json"}
-                    )
-
-                if room_column is None:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"status": "エラー", "detail": "CSVファイルにルーム名を示すカラムが見つかりません"},
-                        headers={"Content-Type": "application/json"}
-                    )
-
-                # 日付型への変換
-                try:
-                    df['date'] = pd.to_datetime(df[date_column], errors='coerce')
-                except Exception as e:
-                    print(f"日付変換エラー: {e}")
-                    return JSONResponse(
-                        status_code=400,
-                        content={"status": "エラー", "detail": f"日付の変換に失敗しました: {str(e)}"},
-                        headers={"Content-Type": "application/json"}
-                    )
-
-                # ルームカラムの標準化
-                df['room'] = df[room_column]
-
-                # 稼働率計算 (フレームデータの場合はステータスから計算)
-                if status_column:
-                    # 予約済みステータスのマッピング
-                    occupied_statuses = ['予約済み', '予約済', '利用', '利用済み', '利用済', '予約', '確定']
-
-                    # ステータスに基づいて稼働率に変換 (0% または 100%)
-                    def status_to_occupancy(status):
-                        if pd.isna(status):
-                            return 0
-                        for s in occupied_statuses:
-                            if s in str(status):
-                                return 100  # 予約済み=100%稼働
-                        return 0  # それ以外=0%稼働
-
-                    df['occupancy_rate'] = df[status_column].apply(status_to_occupancy)
-                else:
-                    # ステータスカラムがない場合はすべて0%とする
-                    df['occupancy_rate'] = 0
-
-                # 日付とルームでグループ化して平均稼働率を計算
-                if len(df) > 0:
-                    occupancy_df = df.groupby(['date', 'room'])['occupancy_rate'].mean().reset_index()
-                    processed_df = occupancy_df.copy()
-                else:
-                    # データがない場合の処理
-                    processed_df = pd.DataFrame(columns=['date', 'room', 'occupancy_rate'])
-
-                # 処理結果の保存
-                target_file_path = f"uploads/occupancy_{timestamp}.csv"
-                details_file_path = f"uploads/occupancy_details_{timestamp}.csv"
-
-                # 日付をYYYY-MM-DD形式に変換
-                processed_df['date'] = processed_df['date'].dt.strftime('%Y-%m-%d')
-                processed_df.to_csv(target_file_path, index=False)
-
-                # 詳細データを保存
-                df.to_csv(details_file_path, index=False)
-
-                # ルーム別の稼働率サマリーを計算
-                room_summary = {}
-                for room in processed_df['room'].unique():
-                    room_data = processed_df[processed_df['room'] == room]
-                    if len(room_data) > 0:
-                        avg_rate = room_data['occupancy_rate'].mean()
-                        min_rate = room_data['occupancy_rate'].min()
-                        max_rate = room_data['occupancy_rate'].max()
-                        room_summary[str(room)] = {
-                            "average": round(avg_rate, 2),
-                            "min": round(min_rate, 2),
-                            "max": round(max_rate, 2),
-                            "days": len(room_data)
-                        }
-
-                # 日付の範囲を取得
-                if len(processed_df) > 0:
-                    min_date = processed_df['date'].min()
-                    max_date = processed_df['date'].max()
-                else:
-                    min_date = "不明"
-                    max_date = "不明"
-
-                # processed_dfをグローバルのdashboard_dataに反映
-                update_dashboard_with_occupancy_data(processed_df)
-
-                return JSONResponse(
-                    content={
-                        "status": "成功",
-                        "file_saved": target_file_path,
-                        "details_saved": details_file_path,
-                        "total_days": len(processed_df),
-                        "date_range": {
-                            "from": min_date,
-                            "to": max_date
-                        },
-                        "room_summary": room_summary
-                    },
-                    headers={"Content-Type": "application/json"}
-                )
-            else:
-                # 汎用処理
-                target_file_path = f"uploads/generic_{timestamp}_{filename}"
-                df.to_csv(target_file_path, index=False)
-                return JSONResponse(
-                    content={
-                        "status": "成功",
-                        "file": filename,
-                        "saved_path": target_file_path,
-                        "rows": len(df),
-                        "columns": df.columns.tolist(),
-                        "auto_detected_type": detected_format
-                    },
-                    headers={"Content-Type": "application/json"}
-                )
-    except Exception as e:
-        print(f"CSV処理エラー: {str(e)}")
-        traceback_str = traceback.format_exc()
-        print(f"トレースバック: {traceback_str}")
-        return JSONResponse(
-            status_code=500,
-            content={"status": "エラー", "detail": str(e), "traceback": traceback_str},
-            headers={"Content-Type": "application/json"}
-        )
-
-# 稼働率データをダッシュボードに反映する関数
-def update_dashboard_with_occupancy_data(occupancy_df):
+def process_uploaded_csv(file, data_type):
     """
-    アップロードされた稼働率データをグローバルのdashboard_dataに反映する関数
-
-    Args:
-        occupancy_df: 日付、ルーム、稼働率のカラムを含むDataFrame
+    CSVファイルを処理してデータを変換し、保存します
     """
     global dashboard_data
 
     try:
-        print("ダッシュボードデータの稼働率情報を更新します")
+        # CSVファイルを読み込む
+        df = pd.read_csv(file.file, encoding='utf-8')
 
-        # utilizationが初期化されていない場合は初期化
-        if not dashboard_data.utilization:
-            dashboard_data.utilization = {}
+        # カラム名を確認して出力
+        print("CSVファイルのカラム:", df.columns.tolist())
 
-        # 月別稼働率データを初期化/更新
-        if "byMonth" not in dashboard_data.utilization:
-            dashboard_data.utilization["byMonth"] = []
+        # データタイプによって処理を分岐
+        if data_type == "occupancy":
+            # オリジナルのカラムを保存
+            original_columns = df.columns.tolist()
 
-        # 曜日別稼働率データを初期化/更新
-        if "byDayOfWeek" not in dashboard_data.utilization:
-            dashboard_data.utilization["byDayOfWeek"] = []
-            for day in dashboard_data.labels["daysOfWeek"]:
-                dashboard_data.utilization["byDayOfWeek"].append({
-                    "name": day,
-                    "Room1": 0,
-                    "Room2": 0,
-                    "Room3": 0
-                })
+            # レッスン予約形式を検出
+            if any(col in original_columns for col in ["ルームコード", "ルーム名"]):
+                print("レッスン予約形式を検出しました")
 
-        # 時間帯別稼働率データを初期化/更新
-        if "byTimeSlot" not in dashboard_data.utilization:
-            dashboard_data.utilization["byTimeSlot"] = []
-            for slot in dashboard_data.labels["timeSlots"]:
-                dashboard_data.utilization["byTimeSlot"].append({
-                    "name": slot,
-                    "Room1": 0,
-                    "Room2": 0,
-                    "Room3": 0
-                })
+                # 必要なカラムがあるか確認
+                date_col = None
+                for col_name in ["レッスン日", "日付", "date"]:
+                    if col_name in original_columns:
+                        date_col = col_name
+                        break
 
-        # 全体サマリーデータを初期化/更新
-        if "summary" not in dashboard_data.utilization:
-            dashboard_data.utilization["summary"] = {
-                "overall": 0,
-                "byRoom": {"Room1": 0, "Room2": 0, "Room3": 0}
-            }
+                if date_col is None:
+                    return {
+                        "status": "エラー",
+                        "detail": "CSVファイルに日付を示すカラムが見つかりません"
+                    }
 
-        # 入力データを確認
-        if occupancy_df is None or len(occupancy_df) == 0:
-            print("警告: 稼働率データが空です")
+                # ルーム名カラムを確認
+                room_col = None
+                for col_name in ["ルーム名", "ルームコード"]:
+                    if col_name in original_columns:
+                        room_col = col_name
+                        break
+
+                if room_col is None:
+                    return {
+                        "status": "エラー",
+                        "detail": "CSVファイルにルーム名を示すカラムが見つかりません"
+                    }
+
+                # 予約カラムを確認
+                reservation_cols = []
+                for col_name in ["総予約数", "無断キャンセル数", "スペース数"]:
+                    if col_name in original_columns:
+                        reservation_cols.append(col_name)
+
+                if not reservation_cols:
+                    return {
+                        "status": "エラー",
+                        "detail": "CSVファイルに予約情報を示すカラムが見つかりません"
+                    }
+
+                # 日付カラムを変換
+                print(f"検出したカラム - 日付: {date_col}, ルーム: {room_col}, 予約: {reservation_cols}")
+                df[date_col] = pd.to_datetime(df[date_col])
+                df = df.rename(columns={date_col: "date"})
+
+                # ルームごとに予約数と稼働率を集計
+                room_summary = df.groupby(room_col).agg(
+                    lesson_count=pd.NamedAgg(column="date", aggfunc="count")
+                )
+
+                # 稼働率カラムがある場合
+                occupancy_col = None
+                for col_name in ["稼働率", "occupancy"]:
+                    if col_name in original_columns:
+                        occupancy_col = col_name
+                        break
+
+                if occupancy_col:
+                    # 稼働率を数値に変換（例：'85%' → 85.0）
+                    df[occupancy_col] = df[occupancy_col].apply(
+                        lambda x: float(str(x).replace('%', '')) if pd.notnull(x) else None
+                    )
+
+                    # ルームごとの平均稼働率を計算
+                    room_summary["avg_occupancy"] = df.groupby(room_col)[occupancy_col].mean()
+
+                    # 稼働率データフレームを作成
+                    occupancy_df = df[[room_col, "date", occupancy_col]].copy()
+                    occupancy_df = occupancy_df.rename(columns={room_col: "room", occupancy_col: "occupancy"})
+
+                    # タイムスタンプを含むファイル名で保存
+                    timestamp = int(time.time())
+                    output_file = f"uploads/occupancy_{timestamp}.csv"
+                    occupancy_df.to_csv(output_file, index=False)
+
+                    # 詳細データを保存
+                    details_file = f"uploads/occupancy_details_{timestamp}.csv"
+                    df.to_csv(details_file, index=False)
+
+                    # ルームごとの詳細情報を取得
+                    room_details = {}
+                    for room in occupancy_df["room"].unique():
+                        room_data = occupancy_df[occupancy_df["room"] == room]
+                        room_occupancy = room_data["occupancy"].tolist()
+                        if room_occupancy:
+                            avg_occ = sum(room_occupancy) / len(room_occupancy)
+                            min_occ = min(room_occupancy)
+                            max_occ = max(room_occupancy)
+                            room_details[room] = {
+                                "avg": avg_occ,
+                                "min": min_occ,
+                                "max": max_occ
+                            }
+
+                    # 日付範囲を取得
+                    min_date = df["date"].min().strftime("%Y-%m-%d")
+                    max_date = df["date"].max().strftime("%Y-%m-%d")
+
+                    # dashboard_dataを更新する
+                    update_dashboard_with_occupancy_data(occupancy_df)
+
+                    return {
+                        "status": "成功",
+                        "file": output_file,
+                        "details_file": details_file,
+                        "total_lessons": len(df),
+                        "date_range": {
+                            "from": min_date,
+                            "to": max_date
+                        },
+                        "room_occupancy": room_details
+                    }
+
+                # 稼働率カラムがない場合はスペース数と予約数から計算
+                else:
+                    if "総予約数" in original_columns and "スペース数" in original_columns:
+                        df["稼働率"] = (df["総予約数"] / df["スペース数"]) * 100
+
+                        # ルームごとの平均稼働率を計算
+                        room_summary["avg_occupancy"] = df.groupby(room_col)["稼働率"].mean()
+
+                        # 稼働率データフレームを作成
+                        occupancy_df = df[[room_col, "date", "稼働率"]].copy()
+                        occupancy_df = occupancy_df.rename(columns={room_col: "room", "稼働率": "occupancy"})
+
+                        # タイムスタンプを含むファイル名で保存
+                        timestamp = int(time.time())
+                        output_file = f"uploads/occupancy_{timestamp}.csv"
+                        occupancy_df.to_csv(output_file, index=False)
+
+                        # 詳細データを保存
+                        details_file = f"uploads/occupancy_details_{timestamp}.csv"
+                        df.to_csv(details_file, index=False)
+
+                        # ルームごとの詳細情報を取得
+                        room_details = {}
+                        for room in occupancy_df["room"].unique():
+                            room_data = occupancy_df[occupancy_df["room"] == room]
+                            room_occupancy = room_data["occupancy"].tolist()
+                            if room_occupancy:
+                                avg_occ = sum(room_occupancy) / len(room_occupancy)
+                                min_occ = min(room_occupancy)
+                                max_occ = max(room_occupancy)
+                                room_details[room] = {
+                                    "avg": avg_occ,
+                                    "min": min_occ,
+                                    "max": max_occ
+                                }
+
+                        # 日付範囲を取得
+                        min_date = df["date"].min().strftime("%Y-%m-%d")
+                        max_date = df["date"].max().strftime("%Y-%m-%d")
+
+                        # dashboard_dataを更新する
+                        update_dashboard_with_occupancy_data(occupancy_df)
+
+                        return {
+                            "status": "成功",
+                            "file": output_file,
+                            "details_file": details_file,
+                            "total_lessons": len(df),
+                            "date_range": {
+                                "from": min_date,
+                                "to": max_date
+                            },
+                            "room_occupancy": room_details
+                        }
+
+            # シンプルなフォーマット（日付、ルーム名、稼働率のみ）
+            elif all(col in original_columns for col in ["date", "room", "occupancy"]):
+                print("シンプルフォーマットを検出しました")
+
+                # 日付カラムを変換
+                df["date"] = pd.to_datetime(df["date"])
+
+                # 稼働率を数値に変換（例：'85%' → 85.0）
+                df["occupancy"] = df["occupancy"].apply(
+                    lambda x: float(str(x).replace('%', '')) if pd.notnull(x) else None
+                )
+
+                # タイムスタンプを含むファイル名で保存
+                timestamp = int(time.time())
+                output_file = f"uploads/occupancy_{timestamp}.csv"
+                df.to_csv(output_file, index=False)
+
+                # ルームごとの詳細情報を取得
+                room_details = {}
+                for room in df["room"].unique():
+                    room_data = df[df["room"] == room]
+                    room_occupancy = room_data["occupancy"].tolist()
+                    if room_occupancy:
+                        avg_occ = sum(room_occupancy) / len(room_occupancy)
+                        min_occ = min(room_occupancy)
+                        max_occ = max(room_occupancy)
+                        room_details[room] = {
+                            "avg": avg_occ,
+                            "min": min_occ,
+                            "max": max_occ
+                        }
+
+                # 日付範囲を取得
+                min_date = df["date"].min().strftime("%Y-%m-%d")
+                max_date = df["date"].max().strftime("%Y-%m-%d")
+
+                # dashboard_dataを更新する
+                update_dashboard_with_occupancy_data(df)
+
+                return {
+                    "status": "成功",
+                    "file": output_file,
+                    "total_lessons": len(df),
+                    "date_range": {
+                        "from": min_date,
+                        "to": max_date
+                    },
+                    "room_occupancy": room_details
+                }
+
+            # フォーマットが認識できない場合
+            else:
+                return {
+                    "status": "エラー",
+                    "detail": "CSVフォーマットが認識できません。正しいフォーマットで再アップロードしてください。"
+                }
+
+        # その他のデータタイプの処理
+        # ...
+
+    except Exception as e:
+        print(f"エラーが発生しました: {str(e)}")
+        traceback.print_exc()
+        return {
+            "status": "エラー",
+            "detail": f"CSVファイルの処理中にエラーが発生しました: {str(e)}"
+        }
+
+def update_dashboard_with_occupancy_data(occupancy_df):
+    """
+    アップロードされた稼働率データをdashboard_dataに反映させる
+
+    Parameters:
+    -----------
+    occupancy_df : pandas.DataFrame
+        date, room, occupancyのカラムを持つDataFrame
+    """
+    global dashboard_data
+
+    try:
+        # DataFrameが空の場合は処理しない
+        if occupancy_df.empty:
+            print("稼働率データが空のため、ダッシュボードの更新をスキップします")
             return
 
-        # 日付型に変換
-        try:
+        # dashboard_data.utilizationが初期化されていない場合は初期化
+        if not hasattr(dashboard_data, 'utilization') or dashboard_data.utilization is None:
+            dashboard_data.utilization = {}
+
+        # 必要なフィールドの初期化
+        if 'monthly' not in dashboard_data.utilization:
+            dashboard_data.utilization['monthly'] = {}
+
+        if 'weekly' not in dashboard_data.utilization:
+            dashboard_data.utilization['weekly'] = {}
+
+        if 'rooms' not in dashboard_data.utilization:
+            dashboard_data.utilization['rooms'] = {}
+
+        # 日付をdatetime形式に変換
+        if isinstance(occupancy_df['date'].iloc[0], str):
             occupancy_df['date'] = pd.to_datetime(occupancy_df['date'])
-        except Exception as e:
-            print(f"日付変換エラー: {e}")
-            # 既に変換済みの場合はスキップ
-            pass
 
-        # 月別データの作成
-        monthly_data = {}
-        for month in dashboard_data.labels["months"]:
-            monthly_data[month] = {"Room1": [], "Room2": [], "Room3": []}
+        # 月別の稼働率を計算
+        occupancy_df['year_month'] = occupancy_df['date'].dt.strftime('%Y-%m')
+        monthly_occupancy = occupancy_df.groupby(['year_month', 'room'])['occupancy'].mean().reset_index()
 
-        # 曜日のマッピング
-        weekday_mapping = {
-            0: "月", 1: "火", 2: "水", 3: "木", 4: "金", 5: "土", 6: "日"
-        }
-
-        # 曜日別データの初期化
-        weekday_data = {day: {"Room1": [], "Room2": [], "Room3": []} for day in dashboard_data.labels["daysOfWeek"]}
-
-        # データの集計
-        for _, row in occupancy_df.iterrows():
-            # 日付、ルーム、稼働率を取得
-            date = row['date']
+        for _, row in monthly_occupancy.iterrows():
+            year_month = row['year_month']
             room = row['room']
-            occupancy_rate = float(row['occupancy_rate'])
+            occupancy = row['occupancy']
 
-            # 月別データに追加
-            month_str = date.strftime('%Y-%m')
-            if month_str in monthly_data and room in ["Room1", "Room2", "Room3"]:
-                monthly_data[month_str][room].append(occupancy_rate)
+            if year_month not in dashboard_data.utilization['monthly']:
+                dashboard_data.utilization['monthly'][year_month] = {}
 
-            # 曜日別データに追加
-            weekday = weekday_mapping.get(date.weekday())
-            if weekday in weekday_data and room in ["Room1", "Room2", "Room3"]:
-                weekday_data[weekday][room].append(occupancy_rate)
+            dashboard_data.utilization['monthly'][year_month][room] = occupancy
 
-        # 月別データの平均を計算
-        dashboard_data.utilization["byMonth"] = []
-        for month, rooms in monthly_data.items():
-            month_data = {"name": month}
-            for room, values in rooms.items():
-                if values:
-                    month_data[room] = round(sum(values) / len(values), 1)
-                else:
-                    month_data[room] = 0
-            dashboard_data.utilization["byMonth"].append(month_data)
+        # 曜日別の稼働率を計算
+        occupancy_df['day_of_week'] = occupancy_df['date'].dt.dayofweek  # 0=月曜, 6=日曜
+        weekly_occupancy = occupancy_df.groupby(['day_of_week', 'room'])['occupancy'].mean().reset_index()
 
-        # 曜日別データの平均を計算
-        dashboard_data.utilization["byDayOfWeek"] = []
-        for day, rooms in weekday_data.items():
-            day_data = {"name": day}
-            for room, values in rooms.items():
-                if values:
-                    day_data[room] = round(sum(values) / len(values), 1)
-                else:
-                    day_data[room] = 0
-            dashboard_data.utilization["byDayOfWeek"].append(day_data)
+        day_names = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
 
-        # 全体サマリーの計算
-        room_avg = {"Room1": 0, "Room2": 0, "Room3": 0}
-        room_count = {"Room1": 0, "Room2": 0, "Room3": 0}
-
-        for _, row in occupancy_df.iterrows():
+        for _, row in weekly_occupancy.iterrows():
+            day_idx = int(row['day_of_week'])
+            day_name = day_names[day_idx]
             room = row['room']
-            if room in room_avg:
-                room_avg[room] += float(row['occupancy_rate'])
-                room_count[room] += 1
+            occupancy = row['occupancy']
 
-        # 平均を計算
-        for room in room_avg:
-            if room_count[room] > 0:
-                room_avg[room] = round(room_avg[room] / room_count[room], 1)
+            if day_name not in dashboard_data.utilization['weekly']:
+                dashboard_data.utilization['weekly'][day_name] = {}
 
-        # 全体平均を計算
-        total_sum = sum(room_avg.values())
-        total_count = sum(1 for v in room_avg.values() if v > 0)
-        overall_avg = round(total_sum / total_count, 1) if total_count > 0 else 0
+            dashboard_data.utilization['weekly'][day_name][room] = occupancy
 
-        # サマリーを更新
-        dashboard_data.utilization["summary"] = {
-            "overall": overall_avg,
-            "byRoom": room_avg
-        }
+        # ルームごとの平均稼働率を計算
+        room_occupancy = occupancy_df.groupby('room')['occupancy'].mean()
 
-        print("ダッシュボードデータが正常に更新されました")
+        for room, occupancy in room_occupancy.items():
+            dashboard_data.utilization['rooms'][room] = {
+                'average': occupancy,
+                'label': room
+            }
+
+        # 全体平均の稼働率も計算
+        overall_avg = occupancy_df['occupancy'].mean()
+        dashboard_data.utilization['overall_average'] = overall_avg
+
+        print(f"ダッシュボードデータを更新しました - ルーム数: {len(room_occupancy)}, 全体平均: {overall_avg:.2f}%")
+
     except Exception as e:
-        print(f"ダッシュボードデータ更新エラー: {str(e)}")
-        print(traceback.format_exc())
+        print(f"ダッシュボードデータの更新中にエラーが発生しました: {str(e)}")
+        traceback.print_exc()
 
 # ヘルスチェック
 @app.get("/health")
